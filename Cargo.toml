@@ -1,0 +1,10 @@
+[package]
+name = "skrapy"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["full"] }
+url = "2.5"
+sha1 = "0.10"
