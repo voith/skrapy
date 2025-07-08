@@ -5,6 +5,7 @@ use sha1::{Digest, Sha1};
 use std::cmp::PartialEq;
 use url::Url as UrlLib;
 
+#[derive(Debug)]
 pub struct Request {
     pub url: Url,
     pub method: Method,
@@ -14,8 +15,9 @@ pub struct Request {
     _internal_meta_data: InternalRequestMetaData,
 }
 
+#[derive(Debug)]
 struct InternalRequestMetaData {
-    priority: u8,
+    priority: i32,
     redirect_count: i8,
     is_start_request: bool,
 }
@@ -38,6 +40,30 @@ impl Default for Request {
 }
 
 impl Request {
+    pub fn new(
+        url: Url,
+        method: Method,
+        headers: HeaderMap,
+        body: Body,
+        callback: Option<fn(Response) -> SpiderOutput>,
+        priority: i32,
+        redirect_count: i8,
+        is_start_request: bool,
+    ) -> Self {
+        Self {
+            url,
+            method,
+            headers,
+            body,
+            callback,
+            _internal_meta_data: InternalRequestMetaData {
+                priority,
+                redirect_count,
+                is_start_request,
+            },
+        }
+    }
+
     pub fn fingerprint(&self) -> Vec<u8> {
         let mut hasher = Sha1::new();
         hasher.update(self.method.as_str().as_bytes());
@@ -51,6 +77,14 @@ impl Request {
         }
 
         hasher.finalize().to_vec()
+    }
+
+    pub fn priority(&self) -> i32 {
+        self._internal_meta_data.priority
+    }
+
+    pub fn is_start_request(&self) -> bool {
+        self._internal_meta_data.is_start_request
     }
 }
 
