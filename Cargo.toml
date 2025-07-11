@@ -8,3 +8,6 @@ reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1", features = ["full"] }
 url = "2.5"
 sha1 = "0.10"
+
+[dev-dependencies]
+httpmock = "0.6"

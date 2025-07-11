@@ -120,7 +120,7 @@ impl Scheduler {
 mod dupefilter_tests {
     use super::*;
     use crate::requests::{Request};
-    use crate::{Method, HeaderMap};
+    use crate::requests::{Method, HeaderMap};
     use reqwest::Url;
 
 
@@ -156,7 +156,7 @@ mod dupefilter_tests {
 #[cfg(test)]
 mod priority_queue_tests {
     use super::*;
-    use crate::{Method, HeaderMap};
+    use crate::requests::{Method, HeaderMap};
     use reqwest::Url;
 
     fn dummy_request_with_priority(url: &str, priority: i32, is_start: bool) -> Request {

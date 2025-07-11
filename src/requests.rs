@@ -1,9 +1,11 @@
 use crate::response::Response;
 use crate::spider::SpiderOutput;
-use crate::{Body, HeaderMap, Method, Url};
 use sha1::{Digest, Sha1};
 use std::cmp::PartialEq;
 use url::Url as UrlLib;
+
+// Imported here so that users can directly import from skrapy
+pub use reqwest::{Body, Method, Url, header::HeaderMap};
 
 #[derive(Debug)]
 pub struct Request {
@@ -15,7 +17,7 @@ pub struct Request {
     _internal_meta_data: InternalRequestMetaData,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct InternalRequestMetaData {
     priority: i32,
     redirect_count: i8,
@@ -95,6 +97,23 @@ impl PartialEq for Request {
 }
 
 impl Eq for Request {}
+
+impl Clone for Request {
+    fn clone(&self) -> Self {
+        // Clone the body by extracting bytes, falling back to empty if needed
+        let body_bytes = self.body.as_bytes().unwrap_or(&[]);
+        let body_clone = Body::from(body_bytes.to_vec());
+
+        Self {
+            url: self.url.clone(),
+            method: self.method.clone(),
+            headers: self.headers.clone(),
+            body: body_clone,
+            callback: self.callback,
+            _internal_meta_data: self._internal_meta_data.clone(),
+        }
+    }
+}
 
 pub fn canonicalize_url(input: &str) -> Option<String> {
     let mut url = UrlLib::parse(input).ok()?;
