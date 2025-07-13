@@ -1,9 +1,10 @@
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use crate::requests::Request;
-use reqwest::Response as ReqwestResponse;
-use tokio::sync::mpsc;
 use reqwest::Client;
+use reqwest::Response as ReqwestResponse;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 
 use tokio::task::JoinHandle;
 
@@ -28,39 +29,46 @@ struct DownloadManager {
     client: Client,
     handles: Vec<JoinHandle<()>>,
     sender: Option<mpsc::Sender<Request>>,
-    busy_flags: Vec<Arc<Mutex<bool>>>,
+    active_count: Arc<AtomicUsize>,
 }
 
 pub struct Downloader {
     client: Client,
     receiver: Arc<Mutex<mpsc::Receiver<Request>>>,
     result_tx: Arc<Mutex<mpsc::Sender<Result<DownloadResult, DownloadError>>>>,
-    busy: Arc<Mutex<bool>>,
+    active_count: Arc<AtomicUsize>,
 }
 
 impl DownloadManager {
-    pub fn new(concurrency_limit: i8, result_tx: Arc<Mutex<mpsc::Sender<Result<DownloadResult, DownloadError>>>>) -> Self {
+    pub fn new(
+        concurrency_limit: i8,
+        result_tx: Arc<Mutex<mpsc::Sender<Result<DownloadResult, DownloadError>>>>,
+    ) -> Self {
         let (sender, receiver) = mpsc::channel(concurrency_limit as usize * 2);
+        let active_count = Arc::new(AtomicUsize::new(0));
         let mut manager = DownloadManager {
             concurrency_limit,
             client: Client::new(),
             handles: Vec::new(),
             sender: Some(sender),
-            busy_flags: Vec::new(),
+            active_count: active_count.clone(),
         };
         manager.start(receiver, result_tx);
         manager
     }
 
-    fn start(&mut self, receiver: mpsc::Receiver<Request>, result_tx: Arc<Mutex<mpsc::Sender<Result<DownloadResult, DownloadError>>>>) {
+    fn start(
+        &mut self,
+        receiver: mpsc::Receiver<Request>,
+        result_tx: Arc<Mutex<mpsc::Sender<Result<DownloadResult, DownloadError>>>>,
+    ) {
         let shared_rx = Arc::new(Mutex::new(receiver));
         for _ in 0..self.concurrency_limit {
             let client = self.client.clone();
             let rx = shared_rx.clone();
             let result_tx_clone = result_tx.clone();
-            let busy = Arc::new(Mutex::new(false));
-            self.busy_flags.push(busy.clone());
-            let mut downloader = Downloader::new(client, rx, result_tx_clone, busy);
+            let active_count = Arc::clone(&self.active_count);
+            let mut downloader = Downloader::new(client, rx, result_tx_clone, active_count);
             let handle = tokio::spawn(async move {
                 downloader.handle_incoming_requests().await;
             });
@@ -85,14 +93,12 @@ impl DownloadManager {
 
     pub async fn is_idle(&self) -> bool {
         if let Some(sender) = &self.sender {
-            if sender.capacity() == 0 {
+            if sender.try_reserve().is_err() {
                 return false;
             }
         }
-        for busy in &self.busy_flags {
-            if *busy.lock().await {
-                return false;
-            }
+        if self.active_count.load(Ordering::SeqCst) != 0 {
+            return false;
         }
         true
     }
@@ -104,20 +110,22 @@ impl DownloadManager {
 // - Graceful Shutdown Signal
 // - logging
 impl Downloader {
-    pub fn new(client: Client, receiver: Arc<Mutex<mpsc::Receiver<Request>>>, result_tx: Arc<Mutex<mpsc::Sender<Result<DownloadResult, DownloadError>>>>, busy: Arc<Mutex<bool>>) -> Self {
+    pub fn new(
+        client: Client,
+        receiver: Arc<Mutex<mpsc::Receiver<Request>>>,
+        result_tx: Arc<Mutex<mpsc::Sender<Result<DownloadResult, DownloadError>>>>,
+        active_count: Arc<AtomicUsize>,
+    ) -> Self {
         Downloader {
             client,
             receiver,
             result_tx,
-            busy,
+            active_count,
         }
     }
 
     /// Perform the HTTP request using reqwest and return the raw response.
-    async fn download(
-        &self,
-        request: &Request,
-    ) -> Result<ReqwestResponse, reqwest::Error> {
+    async fn download(&self, request: &Request) -> Result<ReqwestResponse, reqwest::Error> {
         // Build request
         let mut builder = self
             .client
@@ -146,18 +154,24 @@ impl Downloader {
                 Some(req) => {
                     // Release lock before download
                     drop(rx);
-                    *self.busy.lock().await = true;
+                    self.active_count.fetch_add(1, Ordering::SeqCst);
                     match self.download(&req).await {
                         Ok(response) => {
-                            let result = DownloadResult { request: req, response };
+                            let result = DownloadResult {
+                                request: req,
+                                response,
+                            };
                             let _ = self.result_tx.lock().await.send(Ok(result)).await;
                         }
                         Err(err) => {
-                            let dl_err = DownloadError { request: req, error: HttpError { source: err } };
+                            let dl_err = DownloadError {
+                                request: req,
+                                error: HttpError { source: err },
+                            };
                             let _ = self.result_tx.lock().await.send(Err(dl_err)).await;
                         }
                     }
-                    *self.busy.lock().await = false;
+                    self.active_count.fetch_sub(1, Ordering::SeqCst);
                 }
                 None => break, // channel closed
             }
@@ -165,19 +179,18 @@ impl Downloader {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use super::{DownloadManager, Downloader, DownloadResult, DownloadError, HttpError};
-    use crate::requests::{Request, Body};
+    use super::{DownloadError, DownloadManager, DownloadResult, Downloader, HttpError};
+    use crate::requests::{Body, Request};
+    use httpmock::{Method::GET, MockServer};
+    use reqwest::Client;
     use reqwest::header::HeaderMap;
     use reqwest::{Method, Url};
-    use httpmock::{MockServer, Method::GET};
-    use tokio::sync::mpsc;
-    use tokio::sync::Mutex;
-    use tokio::time::{timeout, Duration};
     use std::sync::Arc;
-    use reqwest::Client;
+    use tokio::sync::Mutex;
+    use tokio::sync::mpsc;
+    use tokio::time::{Duration, timeout};
 
     #[tokio::test]
     async fn test_download_manager_multiple_downloads() {
@@ -213,7 +226,8 @@ mod tests {
         // Collect and verify responses
         for _ in 0..5 {
             let download_result = timeout(Duration::from_secs(2), rx_res.recv())
-                .await.expect("timed out")
+                .await
+                .expect("timed out")
                 .expect("response channel closed");
             match download_result {
                 Ok(res) => {
@@ -247,7 +261,12 @@ mod tests {
             0,
             false,
         );
-        let downloader = Downloader::new(client, Arc::new(Mutex::new(mpsc::channel(1).1)), Arc::new(Mutex::new(mpsc::channel(1).0)), Arc::new(Mutex::new(false)));
+        let downloader = Downloader::new(
+            client,
+            Arc::new(Mutex::new(mpsc::channel(1).1)),
+            Arc::new(Mutex::new(mpsc::channel(1).0)),
+            Arc::new(AtomicUsize::new(0)),
+        );
         let response = downloader.download(&request).await.unwrap();
         let text = response.text().await.unwrap();
         assert_eq!(text, "hello");
@@ -269,7 +288,12 @@ mod tests {
         let (tx_req, rx_req) = mpsc::channel(1);
         let (tx_res, mut rx_res) = mpsc::channel(1);
         let result_tx = Arc::new(Mutex::new(tx_res));
-        let mut downloader = Downloader::new(Client::new(), Arc::new(Mutex::new(rx_req)), result_tx.clone(), Arc::new(Mutex::new(false)));
+        let mut downloader = Downloader::new(
+            Client::new(),
+            Arc::new(Mutex::new(rx_req)),
+            result_tx.clone(),
+            Arc::new(AtomicUsize::new(0)),
+        );
 
         // Spawn the handler
         tokio::spawn(async move {
@@ -309,7 +333,12 @@ mod tests {
         let (tx_req, rx_req) = mpsc::channel(1);
         let (tx_res, mut rx_res) = mpsc::channel(1);
         let result_tx = Arc::new(Mutex::new(tx_res));
-        let mut downloader = Downloader::new(Client::new(), Arc::new(Mutex::new(rx_req)), result_tx.clone(), Arc::new(Mutex::new(false)));
+        let mut downloader = Downloader::new(
+            Client::new(),
+            Arc::new(Mutex::new(rx_req)),
+            result_tx.clone(),
+            Arc::new(AtomicUsize::new(0)),
+        );
 
         tokio::spawn(async move {
             downloader.handle_incoming_requests().await;
@@ -390,7 +419,8 @@ mod tests {
         // Collect all responses
         for _ in 0..num_requests {
             let download_result = timeout(Duration::from_secs(2), rx_res.recv())
-                .await.expect("timeout")
+                .await
+                .expect("timeout")
                 .expect("channel closed");
             assert!(download_result.is_ok());
         }

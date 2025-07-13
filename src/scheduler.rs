@@ -1,6 +1,6 @@
-use std::collections::{HashSet, BinaryHeap};
+use crate::requests::Request;
 use std::cmp::Ordering;
-use crate::requests::{Request};
+use std::collections::{BinaryHeap, HashSet};
 
 #[derive(Debug, Eq, PartialEq)]
 struct PrioritizedRequest {
@@ -63,20 +63,18 @@ impl PriorityQueue {
     }
 }
 
-
 pub trait DupeFilter {
     fn record_request_if_unseen(&mut self, request: &Request) -> bool;
 }
 
 struct MemoryDupeFilter {
-    fingerprints: HashSet<Vec<u8>>
+    fingerprints: HashSet<Vec<u8>>,
 }
 
 struct Scheduler {
     dupefilter: MemoryDupeFilter,
     queue: PriorityQueue,
 }
-
 
 impl MemoryDupeFilter {
     fn new() -> Self {
@@ -115,14 +113,12 @@ impl Scheduler {
     }
 }
 
-
 #[cfg(test)]
 mod dupefilter_tests {
     use super::*;
-    use crate::requests::{Request};
-    use crate::requests::{Method, HeaderMap};
+    use crate::requests::Request;
+    use crate::requests::{HeaderMap, Method};
     use reqwest::Url;
-
 
     fn dummy_request(url: &str) -> Request {
         Request::new(
@@ -147,16 +143,15 @@ mod dupefilter_tests {
 
         assert!(filter.record_request_if_unseen(&req1));
         assert!(!filter.record_request_if_unseen(&req2)); // duplicate
-        assert!(filter.record_request_if_unseen(&req3));  // new
+        assert!(filter.record_request_if_unseen(&req3)); // new
     }
 }
-
 
 // PriorityQueue tests
 #[cfg(test)]
 mod priority_queue_tests {
     use super::*;
-    use crate::requests::{Method, HeaderMap};
+    use crate::requests::{HeaderMap, Method};
     use reqwest::Url;
 
     fn dummy_request_with_priority(url: &str, priority: i32, is_start: bool) -> Request {
@@ -188,9 +183,9 @@ mod priority_queue_tests {
         let popped2 = queue.pop().unwrap();
         let popped3 = queue.pop().unwrap();
 
-        assert_eq!(popped1.url.as_str(), "http://example.com/high");   // priority 0
+        assert_eq!(popped1.url.as_str(), "http://example.com/high"); // priority 0
         assert_eq!(popped2.url.as_str(), "http://example.com/medium"); // priority 10
-        assert_eq!(popped3.url.as_str(), "http://example.com/low");    // priority 50
+        assert_eq!(popped3.url.as_str(), "http://example.com/low"); // priority 50
     }
 
     #[test]
