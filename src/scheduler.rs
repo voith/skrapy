@@ -1,4 +1,4 @@
-use crate::requests::Request;
+use crate::request::Request;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};
 
@@ -116,9 +116,15 @@ impl Scheduler {
 #[cfg(test)]
 mod dupefilter_tests {
     use super::*;
-    use crate::requests::Request;
-    use crate::requests::{HeaderMap, Method};
+    use crate::request::Request;
+    use crate::request::{HeaderMap, Method};
+    use crate::response::Response;
+    use crate::spider::SpiderOutput;
     use reqwest::Url;
+
+    fn dummy_callback(_: Response) -> Box<dyn Iterator<Item = SpiderOutput> + Send> {
+        Box::new(std::iter::empty())
+    }
 
     fn dummy_request(url: &str) -> Request {
         Request::new(
@@ -126,7 +132,7 @@ mod dupefilter_tests {
             Method::GET,
             HeaderMap::new(),
             "".into(),
-            None,
+            dummy_callback,
             0,
             0,
             false,
@@ -151,8 +157,14 @@ mod dupefilter_tests {
 #[cfg(test)]
 mod priority_queue_tests {
     use super::*;
-    use crate::requests::{HeaderMap, Method};
+    use crate::request::{HeaderMap, Method};
+    use crate::response::Response;
+    use crate::spider::SpiderOutput;
     use reqwest::Url;
+
+    fn dummy_callback(_: Response) -> Box<dyn Iterator<Item = SpiderOutput> + Send> {
+        Box::new(std::iter::empty())
+    }
 
     fn dummy_request_with_priority(url: &str, priority: i32, is_start: bool) -> Request {
         Request::new(
@@ -160,7 +172,7 @@ mod priority_queue_tests {
             Method::GET,
             HeaderMap::new(),
             "".into(),
-            None,
+            dummy_callback,
             priority,
             0,
             is_start,

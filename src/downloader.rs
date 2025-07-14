@@ -1,4 +1,4 @@
-use crate::requests::Request;
+use crate::request::Request;
 use reqwest::Client;
 use reqwest::Response as ReqwestResponse;
 use std::sync::Arc;
@@ -182,7 +182,7 @@ impl Downloader {
 #[cfg(test)]
 mod tests {
     use super::{DownloadError, DownloadManager, DownloadResult, Downloader, HttpError};
-    use crate::requests::{Body, Request};
+    use crate::request::{Body, Request};
     use httpmock::{Method::GET, MockServer};
     use reqwest::Client;
     use reqwest::header::HeaderMap;
@@ -191,6 +191,11 @@ mod tests {
     use tokio::sync::Mutex;
     use tokio::sync::mpsc;
     use tokio::time::{Duration, timeout};
+    use std::sync::atomic::{AtomicUsize};
+
+    fn dummy_callback(_: crate::response::Response) -> Box<dyn Iterator<Item = crate::spider::SpiderOutput> + Send> {
+        Box::new(std::iter::empty())
+    }
 
     #[tokio::test]
     async fn test_download_manager_multiple_downloads() {
@@ -215,7 +220,7 @@ mod tests {
                 Method::GET,
                 HeaderMap::new(),
                 Body::default(),
-                None,
+                dummy_callback,
                 0,
                 0,
                 false,
@@ -256,7 +261,7 @@ mod tests {
             Method::GET,
             HeaderMap::new(),
             Body::default(),
-            None,
+            dummy_callback,
             0,
             0,
             false,
@@ -280,7 +285,7 @@ mod tests {
             Method::GET,
             HeaderMap::new(),
             Body::default(),
-            None,
+            dummy_callback,
             0,
             0,
             false,
@@ -325,7 +330,7 @@ mod tests {
             Method::GET,
             HeaderMap::new(),
             Body::default(),
-            None,
+            dummy_callback,
             0,
             0,
             false,
@@ -372,7 +377,7 @@ mod tests {
             Method::GET,
             HeaderMap::new(),
             Body::default(),
-            None,
+            dummy_callback,
             0,
             0,
             false,
@@ -408,7 +413,7 @@ mod tests {
                 Method::GET,
                 HeaderMap::new(),
                 Body::default(),
-                None,
+                dummy_callback,
                 0,
                 0,
                 false,
@@ -449,7 +454,7 @@ mod tests {
             Method::GET,
             HeaderMap::new(),
             Body::default(),
-            None,
+            dummy_callback,
             0,
             0,
             false,
