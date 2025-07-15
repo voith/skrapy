@@ -11,3 +11,4 @@ sha1 = "0.10"
 
 [dev-dependencies]
 httpmock = "0.6"
+http = "1"

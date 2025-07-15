@@ -9,15 +9,13 @@ pub trait Spider {
     fn start(&self) -> Box<dyn Iterator<Item = Request> + Send>;
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use url::Url;
-    use reqwest::{Method, header::HeaderMap, Body};
-    use crate::response::Response;
     use crate::request::Request;
-    use crate::items::Item;
+    use crate::response::Response;
+    use reqwest::{Body, Method, header::HeaderMap};
+    use url::Url;
 
     struct MySpider;
 
@@ -33,10 +31,13 @@ mod tests {
                 0,
                 false,
             );
-            Box::new(vec![SpiderOutput {
-                item: None,
-                request: Some(request),
-            }].into_iter())
+            Box::new(
+                vec![SpiderOutput {
+                    item: None,
+                    request: Some(request),
+                }]
+                .into_iter(),
+            )
         }
     }
 
@@ -71,13 +72,22 @@ mod tests {
         let spider = MySpider;
         let mut requests: Vec<Request> = spider.start().collect();
         assert_eq!(requests.len(), 2);
-
-        // Create a dummy Response. This assumes Response::dummy() exists or use Response::default() if available
-        let dummy_response = Response::default();
+        let http_response = http::Response::builder()
+            .status(200)
+            .body(reqwest::Body::from("dummy"))
+            .unwrap();
+        let reqwest_response = reqwest::Response::from(http_response);
+        let dummy_response = Response {
+            request: Request::default(),
+            res: reqwest_response,
+        };
         let callback = requests.remove(0).callback;
 
         let results: Vec<SpiderOutput> = callback(dummy_response).collect();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].request.as_ref().unwrap().url.as_str(), "https://example.com/parsed");
+        assert_eq!(
+            results[0].request.as_ref().unwrap().url.as_str(),
+            "https://example.com/parsed"
+        );
     }
 }

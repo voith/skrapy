@@ -1,7 +1,7 @@
-pub struct Response {}
+use crate::request::Request;
+use reqwest::Response as ReqwestResponse;
 
-impl Default for Response {
-    fn default() -> Self {
-        Self {}
-    }
+pub struct Response {
+    pub request: Request,
+    pub res: ReqwestResponse,
 }
