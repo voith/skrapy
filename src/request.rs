@@ -7,13 +7,15 @@ use url::Url as UrlLib;
 // Imported here so that users can directly import from skrapy
 pub use reqwest::{Body, Method, Url, header::HeaderMap};
 
+pub type CallbackReturn = Box<dyn Iterator<Item = SpiderOutput> + Send>;
+
 #[derive(Debug)]
 pub struct Request {
     pub url: Url,
     pub method: Method,
     pub headers: HeaderMap,
     pub body: Body,
-    pub callback: fn(Response) -> Box<dyn Iterator<Item = SpiderOutput> + Send>,
+    pub callback: fn(Response) -> CallbackReturn,
     _internal_meta_data: InternalRequestMetaData,
 }
 
@@ -24,7 +26,7 @@ struct InternalRequestMetaData {
     is_start_request: bool,
 }
 
-fn is_empty_callback(_: Response) -> Box<dyn Iterator<Item = SpiderOutput> + Send> {
+fn is_empty_callback(_: Response) -> CallbackReturn {
     Box::new(std::iter::empty())
 }
 
@@ -51,7 +53,7 @@ impl Request {
         method: Method,
         headers: HeaderMap,
         body: Body,
-        callback: fn(Response) -> Box<dyn Iterator<Item = SpiderOutput> + Send>,
+        callback: fn(Response) -> CallbackReturn,
         priority: i32,
         redirect_count: i8,
         is_start_request: bool,
@@ -102,7 +104,7 @@ impl Request {
 
     pub fn with_callback(
         mut self,
-        cb: fn(Response) -> Box<dyn Iterator<Item = SpiderOutput> + Send>,
+        cb: fn(Response) -> CallbackReturn,
     ) -> Self {
         self.callback = cb;
         self
@@ -209,7 +211,7 @@ mod test {
 
     #[test]
     fn test_get_request_with_callback() {
-        fn dummy_callback(_: Response) -> Box<dyn Iterator<Item = SpiderOutput> + Send> {
+        fn dummy_callback(_: Response) -> CallbackReturn {
             Box::new(std::iter::empty())
         }
 
@@ -224,7 +226,7 @@ mod test {
 
     #[test]
     fn test_post_request_with_callback() {
-        fn dummy_callback(_: Response) -> Box<dyn Iterator<Item = SpiderOutput> + Send> {
+        fn dummy_callback(_: Response) -> CallbackReturn {
             Box::new(std::iter::empty())
         }
 
@@ -239,7 +241,7 @@ mod test {
 
     #[test]
     fn test_request_chaining_post_callback() {
-        fn dummy_callback(_: Response) -> Box<dyn Iterator<Item = SpiderOutput> + Send> {
+        fn dummy_callback(_: Response) -> CallbackReturn {
             Box::new(std::iter::empty())
         }
 

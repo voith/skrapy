@@ -1,8 +1,8 @@
-use crate::{items::Item, request::Request, response::Response};
+use crate::{items::Item, request::Request};
 
-pub struct SpiderOutput {
-    item: Option<Item>,
-    request: Option<Request>,
+pub enum SpiderOutput {
+    Item(Item),
+    Request(Request),
 }
 
 pub trait Spider {
@@ -32,10 +32,7 @@ mod tests {
                 false,
             );
             Box::new(
-                vec![SpiderOutput {
-                    item: None,
-                    request: Some(request),
-                }]
+                vec![SpiderOutput::Request(request)]
                 .into_iter(),
             )
         }
@@ -85,9 +82,11 @@ mod tests {
 
         let results: Vec<SpiderOutput> = callback(dummy_response).collect();
         assert_eq!(results.len(), 1);
-        assert_eq!(
-            results[0].request.as_ref().unwrap().url.as_str(),
-            "https://example.com/parsed"
-        );
+        match &results[0] {
+            SpiderOutput::Request(req) => {
+                assert_eq!(req.url.as_str(), "https://example.com/parsed");
+            }
+            _ => panic!("Expected a Request variant"),
+        }
     }
 }

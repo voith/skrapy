@@ -1895,6 +1895,7 @@ dependencies = [
  "reqwest",
  "sha1",
  "tokio",
+ "tokio-util",
  "url",
 ]
 
