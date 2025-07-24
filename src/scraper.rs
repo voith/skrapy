@@ -10,30 +10,27 @@ use crate::spider::{Spider, SpiderOutput};
 use crate::downloader::DownloadResult;
 
 use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio_util::sync::CancellationToken;
 
 
 pub struct Scraper {
     result_tx: Sender<DownloadResult>,
-    result_rx: Receiver<DownloadResult>,
     output_tx: Sender<CallbackReturn>,
-    output_rx: Receiver<CallbackReturn>,
     spider: Box<dyn Spider>,
-    shutdown_token: CancellationToken,
 }
 
 impl Scraper {
-    pub fn new(buffer: usize, spider: Box<dyn Spider>, shutdown_token: CancellationToken) -> Self {
+    pub fn new(buffer: usize, spider: Box<dyn Spider>) -> (Self, Receiver<DownloadResult>, Receiver<CallbackReturn>) {
         let (result_tx, result_rx) = mpsc::channel(buffer);
         let (output_tx, output_rx) = mpsc::channel(buffer);
-        Self {
-            result_tx,
+        (
+            Self {
+                result_tx,
+                output_tx,
+                spider,
+            },
             result_rx,
-            output_tx,
             output_rx,
-            spider,
-            shutdown_token,
-        }
+        )
     }
 
     pub async fn enqueue_response(
@@ -50,47 +47,31 @@ impl Scraper {
         })
     }
 
-    pub async fn process_response(&self, download_result: DownloadResult) {
-        let response = Response::from(download_result);
-        let output = (response.request.callback)(response);
-        self.enqueue_spider_output(output).await;
+    pub async fn process_response(&self, result_rx: &mut Receiver<DownloadResult>) {
+        if let Some(download_result) = result_rx.recv().await {
+            let response = Response::from(download_result);
+            let output = (response.request.callback)(response);
+            self.enqueue_spider_output(output).await;
+        }
     }
 
     async fn enqueue_spider_output(&self, output: CallbackReturn) {
-        self.output_tx.send(output).await;
+        let _ = self.output_tx.send(output).await;
     }
 
-    pub async fn process_spider_output(&self, spider_output_iter: CallbackReturn) {
-        for spider_output in spider_output_iter {
-            match &spider_output {
-                SpiderOutput::Item(item) => {
-                    // TODO:: Implement ItemManager
-                }
-                SpiderOutput::Request(request) => {
-                    // TODO:: Implement Spider Request Output handler
+    pub async fn process_spider_output(&self, output_rx: &mut Receiver<CallbackReturn>) {
+        if let Some(spider_output_iter) = output_rx.recv().await {
+            for spider_output in spider_output_iter {
+                match &spider_output {
+                    SpiderOutput::Item(item) => {
+                        // TODO:: Implement ItemManager
+                    }
+                    SpiderOutput::Request(request) => {
+                        // TODO:: Implement Spider Request Output handler
+                    }
                 }
             }
         }
-    }
-
-    pub async fn run(&mut self) {
-        loop {
-            tokio::select! {
-                Some(download_result) = self.result_rx.recv() => {
-                    self.process_response(download_result).await;
-                }
-                Some(spider_output_iter) = self.output_rx.recv() => {
-                    self.process_spider_output(spider_output_iter).await;
-                }
-                _ = self.shutdown_token.cancelled() => {
-                    break;
-                }
-            }
-        }
-    }
-
-    pub fn is_idle(&self) -> bool {
-        self.result_rx.is_empty() && self.output_rx.is_empty()
     }
 }
 
@@ -98,7 +79,6 @@ impl Scraper {
 mod tests {
     use super::*;
     use reqwest::Response as ReqwestResponse;
-    use tokio::time::{sleep, Duration};
     use std::sync::atomic::{AtomicBool, Ordering};
 
 
@@ -107,7 +87,6 @@ mod tests {
     // A simple function pointer callback that flips the flag
     fn dummy_callback(_: Response) -> CallbackReturn {
         FLAG.store(true, Ordering::SeqCst);
-        println!("entered dummy_callback");
         Box::new(std::iter::empty())
     }
 
@@ -132,8 +111,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_generate_start_requests_marks_requests_as_start() {
-        let shutdown_token = CancellationToken::new();
-        let scraper = Scraper::new(10, Box::new(TestSpider), shutdown_token);
+        let (scraper, _result_rx, _output_rx) = Scraper::new(10, Box::new(TestSpider));
         let mut requests = scraper.generate_start_requests();
 
         let req = requests.next().expect("Expected at least one request");
@@ -146,17 +124,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "ValidationError: Callback cannot be empty")]
     fn test_generate_start_requests_panics_on_empty_callback() {
-        let shutdown_token = CancellationToken::new();
-        let scraper = Scraper::new(10, Box::new(BadSpider), shutdown_token);
+        let (scraper, _result_rx, _output_rx) = Scraper::new(10, Box::new(BadSpider));
         let mut requests = scraper.generate_start_requests();
         let _ = requests.next();
     }
 
     #[tokio::test]
     async fn test_scraper_process_response_callback() {
-        let shutdown_token = CancellationToken::new();
-        let spider_box = Box::new(TestSpider);
-        let scraper = Scraper::new(10, spider_box, shutdown_token);
+        let (scraper, mut result_rx, _output_rx) = Scraper::new(10, Box::new(TestSpider));
 
         let dummy_req = Request::get("http://example.com").with_callback(dummy_callback);
         let dummy_res = http::Response::builder()
@@ -169,70 +144,8 @@ mod tests {
             request: dummy_req,
             response: reqwest_res,
         };
-        scraper.process_response(download_result).await;
+        let _ = scraper.enqueue_response(download_result).await;
+        scraper.process_response(&mut result_rx).await;
         assert!(FLAG.load(Ordering::SeqCst), "Callback was not triggered");
-    }
-
-    #[tokio::test]
-    async fn test_scraper_run_callback() {
-        let shutdown_token = CancellationToken::new();
-        let spider_box = Box::new(TestSpider);
-        let mut scraper = Scraper::new(10, spider_box, shutdown_token.clone());
-
-        let dummy_req = Request::get("http://example.com").with_callback(dummy_callback);
-        let dummy_res = http::Response::builder()
-            .status(200)
-            .body(Vec::new())
-            .unwrap();
-        let reqwest_res = ReqwestResponse::from(dummy_res);
-
-        let download_result = DownloadResult {
-            request: dummy_req,
-            response: reqwest_res,
-        };
-        let _ = scraper.enqueue_response(download_result).await;
-        
-        // Spawn a task to trigger shutdown after a short delay
-        let shutdown_token_clone = shutdown_token.clone();
-        tokio::spawn(async move {
-            sleep(Duration::from_millis(100)).await;
-            shutdown_token_clone.cancel();
-        });
-        scraper.run().await;
-        // assert!(FLAG.load(Ordering::SeqCst), "Callback was not triggered");
-    }
-
-    #[tokio::test]
-    async fn test_scraper_is_idle() {
-        let shutdown_token = CancellationToken::new();
-        let spider_box = Box::new(TestSpider);
-        let mut scraper = Scraper::new(10, spider_box, shutdown_token.clone());
-
-        assert!(scraper.is_idle(), "Scraper should be idle initially");
-
-        let dummy_req = Request::get("http://example.com").with_callback(dummy_callback);
-        let dummy_res = http::Response::builder()
-            .status(200)
-            .body(Vec::new())
-            .unwrap();
-        let reqwest_res = ReqwestResponse::from(dummy_res);
-
-        let download_result = DownloadResult {
-            request: dummy_req,
-            response: reqwest_res,
-        };
-
-        let _ = scraper.enqueue_response(download_result).await;
-        assert!(!scraper.is_idle(), "Scraper should not be idle after enqueuing a response");
-
-        // Spawn shutdown signal
-        let shutdown_token_clone = shutdown_token.clone();
-        tokio::spawn(async move {
-            sleep(Duration::from_millis(100)).await;
-            shutdown_token_clone.cancel();
-        });
-
-        scraper.run().await;
-        assert!(scraper.is_idle(), "Scraper should be idle after run completes");
     }
 }

@@ -3,8 +3,7 @@ use reqwest::Client;
 use reqwest::Response as ReqwestResponse;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::sync::Mutex;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 
 use tokio::task::JoinHandle;
 
@@ -24,8 +23,8 @@ pub struct DownloadError {
     pub error: HttpError,
 }
 
-struct DownloadManager {
-    concurrency_limit: i8,
+pub struct DownloadManager {
+    concurrency_limit: usize,
     client: Client,
     handles: Vec<JoinHandle<()>>,
     sender: Option<mpsc::Sender<Request>>,
@@ -41,10 +40,10 @@ pub struct Downloader {
 
 impl DownloadManager {
     pub fn new(
-        concurrency_limit: i8,
+        concurrency_limit: usize,
         result_tx: Arc<Mutex<mpsc::Sender<Result<DownloadResult, DownloadError>>>>,
     ) -> Self {
-        let (sender, receiver) = mpsc::channel(concurrency_limit as usize * 2);
+        let (sender, receiver) = mpsc::channel(concurrency_limit * 2);
         let active_count = Arc::new(AtomicUsize::new(0));
         let mut manager = DownloadManager {
             concurrency_limit,
@@ -63,7 +62,7 @@ impl DownloadManager {
         result_tx: Arc<Mutex<mpsc::Sender<Result<DownloadResult, DownloadError>>>>,
     ) {
         let shared_rx = Arc::new(Mutex::new(receiver));
-        for _ in 0..self.concurrency_limit {
+        for _ in 0..self.concurrency_limit as usize {
             let client = self.client.clone();
             let rx = shared_rx.clone();
             let result_tx_clone = result_tx.clone();
