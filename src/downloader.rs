@@ -3,7 +3,7 @@ use reqwest::Client;
 use reqwest::Response as ReqwestResponse;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 use tokio::task::JoinHandle;
 

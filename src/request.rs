@@ -22,7 +22,7 @@ pub struct Request {
 #[derive(Debug, Clone)]
 struct InternalRequestMetaData {
     priority: i32,
-    redirect_count: i8,
+    retry_count: i8,
     is_start_request: bool,
 }
 
@@ -40,7 +40,7 @@ impl Default for Request {
             callback: is_empty_callback,
             _internal_meta_data: InternalRequestMetaData {
                 priority: 0,
-                redirect_count: 0,
+                retry_count: 0,
                 is_start_request: false,
             },
         }
@@ -55,7 +55,7 @@ impl Request {
         body: Body,
         callback: fn(Response) -> CallbackReturn,
         priority: i32,
-        redirect_count: i8,
+        retry_count: i8,
         is_start_request: bool,
     ) -> Self {
         Self {
@@ -66,7 +66,7 @@ impl Request {
             callback,
             _internal_meta_data: InternalRequestMetaData {
                 priority,
-                redirect_count,
+                retry_count,
                 is_start_request,
             },
         }
@@ -81,7 +81,7 @@ impl Request {
             callback: |_| Box::new(std::iter::empty()),
             _internal_meta_data: InternalRequestMetaData {
                 priority: 0,
-                redirect_count: 0,
+                retry_count: 0,
                 is_start_request: false,
             },
         }
@@ -96,16 +96,13 @@ impl Request {
             callback: |_| Box::new(std::iter::empty()),
             _internal_meta_data: InternalRequestMetaData {
                 priority: 0,
-                redirect_count: 0,
+                retry_count: 0,
                 is_start_request: false,
             },
         }
     }
 
-    pub fn with_callback(
-        mut self,
-        cb: fn(Response) -> CallbackReturn,
-    ) -> Self {
+    pub fn with_callback(mut self, cb: fn(Response) -> CallbackReturn) -> Self {
         self.callback = cb;
         self
     }

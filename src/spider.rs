@@ -31,10 +31,7 @@ mod tests {
                 0,
                 false,
             );
-            Box::new(
-                vec![SpiderOutput::Request(request)]
-                .into_iter(),
-            )
+            Box::new(vec![SpiderOutput::Request(request)].into_iter())
         }
     }
 

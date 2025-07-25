@@ -1,6 +1,6 @@
+use crate::downloader::DownloadResult;
 use crate::request::Request;
 use reqwest::Response as ReqwestResponse;
-use crate::downloader::DownloadResult;
 
 pub struct Response {
     pub request: Request,
@@ -19,12 +19,11 @@ impl From<DownloadResult> for Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use http::Response as HttpResponse;
-    use reqwest::Response as ReqwestResponse;
-    use crate::request::Request;
     use crate::downloader::DownloadResult;
+    use crate::request::Request;
+    use http::Response as HttpResponse;
     use http::Version;
-
+    use reqwest::Response as ReqwestResponse;
 
     #[test]
     fn test_response_from_download_result() {
