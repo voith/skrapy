@@ -4,7 +4,6 @@ use reqwest::Response as ReqwestResponse;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Mutex, mpsc};
-
 use tokio::task::JoinHandle;
 
 pub struct DownloadResult {
@@ -29,6 +28,7 @@ pub struct DownloadManager {
     handles: Vec<JoinHandle<()>>,
     sender: Option<mpsc::Sender<Request>>,
     active_count: Arc<AtomicUsize>,
+    pending_count: Arc<AtomicUsize>,
 }
 
 pub struct Downloader {
@@ -36,6 +36,7 @@ pub struct Downloader {
     receiver: Arc<Mutex<mpsc::Receiver<Request>>>,
     result_tx: Arc<Mutex<mpsc::Sender<Result<DownloadResult, DownloadError>>>>,
     active_count: Arc<AtomicUsize>,
+    pending_count: Arc<AtomicUsize>,
 }
 
 impl DownloadManager {
@@ -43,14 +44,16 @@ impl DownloadManager {
         concurrency_limit: usize,
         result_tx: Arc<Mutex<mpsc::Sender<Result<DownloadResult, DownloadError>>>>,
     ) -> Self {
-        let (sender, receiver) = mpsc::channel(concurrency_limit * 2);
         let active_count = Arc::new(AtomicUsize::new(0));
+        let pending_count = Arc::new(AtomicUsize::new(0));
+        let (sender, receiver) = mpsc::channel(concurrency_limit * 2);
         let mut manager = DownloadManager {
             concurrency_limit,
             client: Client::new(),
             handles: Vec::new(),
             sender: Some(sender),
-            active_count: active_count.clone(),
+            active_count: active_count,
+            pending_count: pending_count,
         };
         manager.start(receiver, result_tx);
         manager
@@ -67,7 +70,9 @@ impl DownloadManager {
             let rx = shared_rx.clone();
             let result_tx_clone = result_tx.clone();
             let active_count = Arc::clone(&self.active_count);
-            let mut downloader = Downloader::new(client, rx, result_tx_clone, active_count);
+            let pending_count = Arc::clone(&self.pending_count);
+            let mut downloader =
+                Downloader::new(client, rx, result_tx_clone, active_count, pending_count);
             let handle = tokio::spawn(async move {
                 downloader.handle_incoming_requests().await;
             });
@@ -85,21 +90,15 @@ impl DownloadManager {
     }
 
     pub async fn enqueue_request(&self, request: Request) {
+        self.pending_count.fetch_add(1, Ordering::SeqCst);
         if let Some(sender) = &self.sender {
             let _ = sender.send(request).await;
         }
     }
 
-    pub async fn is_idle(&self) -> bool {
-        if let Some(sender) = &self.sender {
-            if sender.try_reserve().is_err() {
-                return false;
-            }
-        }
-        if self.active_count.load(Ordering::SeqCst) != 0 {
-            return false;
-        }
-        true
+    pub fn is_idle(&self) -> bool {
+        self.pending_count.load(Ordering::SeqCst) == 0
+            && self.active_count.load(Ordering::SeqCst) == 0
     }
 }
 
@@ -114,12 +113,14 @@ impl Downloader {
         receiver: Arc<Mutex<mpsc::Receiver<Request>>>,
         result_tx: Arc<Mutex<mpsc::Sender<Result<DownloadResult, DownloadError>>>>,
         active_count: Arc<AtomicUsize>,
+        pending_count: Arc<AtomicUsize>,
     ) -> Self {
         Downloader {
             client,
             receiver,
             result_tx,
             active_count,
+            pending_count,
         }
     }
 
@@ -151,6 +152,7 @@ impl Downloader {
             let mut rx = self.receiver.lock().await;
             match rx.recv().await {
                 Some(req) => {
+                    self.pending_count.fetch_sub(1, Ordering::SeqCst);
                     // Release lock before download
                     drop(rx);
                     self.active_count.fetch_add(1, Ordering::SeqCst);
@@ -180,7 +182,7 @@ impl Downloader {
 
 #[cfg(test)]
 mod tests {
-    use super::{DownloadError, DownloadManager, DownloadResult, Downloader, HttpError};
+    use super::{DownloadManager, Downloader};
     use crate::request::{Body, Request};
     use httpmock::{Method::GET, MockServer};
     use reqwest::Client;
@@ -272,6 +274,7 @@ mod tests {
             Arc::new(Mutex::new(mpsc::channel(1).1)),
             Arc::new(Mutex::new(mpsc::channel(1).0)),
             Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
         );
         let response = downloader.download(&request).await.unwrap();
         let text = response.text().await.unwrap();
@@ -298,6 +301,7 @@ mod tests {
             Client::new(),
             Arc::new(Mutex::new(rx_req)),
             result_tx.clone(),
+            Arc::new(AtomicUsize::new(0)),
             Arc::new(AtomicUsize::new(0)),
         );
 
@@ -344,6 +348,7 @@ mod tests {
             Arc::new(Mutex::new(rx_req)),
             result_tx.clone(),
             Arc::new(AtomicUsize::new(0)),
+            Arc::new(AtomicUsize::new(0)),
         );
 
         tokio::spawn(async move {
@@ -370,7 +375,7 @@ mod tests {
         let mut manager = DownloadManager::new(2, result_tx.clone());
 
         // Should be idle initially
-        assert!(manager.is_idle().await);
+        assert!(manager.is_idle());
 
         // Enqueue a request
         let request = Request::new(
@@ -389,7 +394,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // Should not be idle as a task is in progress
-        let is_idle = manager.is_idle().await;
+        let is_idle = manager.is_idle();
         assert!(!is_idle);
     }
 
@@ -435,7 +440,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
 
         // Ensure the manager is idle again
-        assert!(manager.is_idle().await);
+        assert!(manager.is_idle());
     }
 
     #[tokio::test]
@@ -468,6 +473,6 @@ mod tests {
         assert!(manager.sender.is_none());
 
         // After stopping, the manager should report as idle
-        assert!(manager.is_idle().await);
+        assert!(manager.is_idle());
     }
 }
