@@ -55,7 +55,7 @@ impl Engine {
         }
     }
 
-    async fn shudown_if_idle(&self) {
+    fn shudown_if_idle(&self) {
         if self.are_start_requested_enqueued
             && self.download_manager.is_idle()
             && self.request_queue_rx.is_empty()
@@ -125,7 +125,7 @@ impl Engine {
                 },
             }
             // shudown if idle
-            self.shudown_if_idle().await;
+            self.shudown_if_idle();
         }
     }
 
