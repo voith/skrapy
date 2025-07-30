@@ -100,6 +100,11 @@ impl DownloadManager {
         self.pending_count.load(Ordering::SeqCst) == 0
             && self.active_count.load(Ordering::SeqCst) == 0
     }
+
+    pub fn needs_backoff(&self) -> bool {
+        // back off if the queue is full
+        self.pending_count.load(Ordering::SeqCst) == (self.concurrency_limit * 2)
+    }
 }
 
 // TODO List

@@ -34,7 +34,7 @@ impl PriorityQueue {
 
     pub fn push(&mut self, request: Request) {
         let mut base_priority = request.priority(); // 0 is highest priority
-        let priority = if request.is_start_request() {
+        let mut priority = if request.is_start_request() {
             0 // Make start requests come first
         } else {
             if base_priority == 0 {
@@ -42,6 +42,7 @@ impl PriorityQueue {
             }
             base_priority
         };
+        priority += request.retry_count() as i32;
 
         self.heap.push(PrioritizedRequest { priority, request });
     }
@@ -71,7 +72,7 @@ struct MemoryDupeFilter {
     fingerprints: HashSet<Vec<u8>>,
 }
 
-struct Scheduler {
+pub struct Scheduler {
     dupefilter: MemoryDupeFilter,
     queue: PriorityQueue,
 }
@@ -108,8 +109,12 @@ impl Scheduler {
         }
     }
 
-    pub fn next_request(&mut self) -> Option<Request> {
+    pub async fn next_request(&mut self) -> Option<Request> {
         self.queue.pop()
+    }
+
+    pub fn has_pending_requests(&self) -> bool {
+        !self.queue.is_empty()
     }
 }
 

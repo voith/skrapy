@@ -143,6 +143,14 @@ impl Request {
     pub fn is_start_request(&self) -> bool {
         self._internal_meta_data.is_start_request
     }
+
+    pub fn retry_count(&self) -> i8 {
+        self._internal_meta_data.retry_count
+    }
+
+    pub fn increment_retry_count(mut self) {
+        self._internal_meta_data.retry_count += 1;
+    }
 }
 
 impl PartialEq for Request {
