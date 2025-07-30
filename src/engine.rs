@@ -1,7 +1,7 @@
 use crate::downloader::{DownloadError, DownloadManager, DownloadResult};
 use crate::request::{CallbackReturn, Request};
-use crate::scraper::Scraper;
 use crate::scheduler::Scheduler;
+use crate::scraper::Scraper;
 use crate::spider::Spider;
 use std::sync::Arc;
 use tokio::signal;
@@ -141,13 +141,12 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::items::Item;
     use crate::response::Response;
     use crate::spider::SpiderOutput;
-    use crate::items::Item;
     use httpmock::Method::GET;
     use httpmock::MockServer;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use tokio::time::{sleep, Duration};
 
     #[tokio::test]
     async fn test_engine_callback_with_multiple_requests() {
@@ -164,9 +163,7 @@ mod tests {
         // Callback that increments the coun
         fn counting_callback(_: Response) -> CallbackReturn {
             CALLBACK_COUNT.fetch_add(1, Ordering::SeqCst);
-            Box::new(std::iter::once({
-                SpiderOutput::Item(Item::default())
-            }))
+            Box::new(std::iter::once({ SpiderOutput::Item(Item::default()) }))
         }
 
         struct BulkSpider {
@@ -177,10 +174,7 @@ mod tests {
                 let mut reqs = Vec::new();
                 for i in 0..10 {
                     let url = format!("{}/{}", self.base_url.trim_end_matches('/'), i);
-                    reqs.push(
-                        Request::get(&url)
-                            .with_callback(counting_callback)
-                    );
+                    reqs.push(Request::get(&url).with_callback(counting_callback));
                 }
                 Box::new(reqs.into_iter())
             }
@@ -197,8 +191,6 @@ mod tests {
         assert_eq!(count, 10);
     }
 
-    
-
     #[tokio::test]
     async fn test_engine_handles_one_request_and_shuts_down() {
         static FLAG: AtomicBool = AtomicBool::new(false);
@@ -208,16 +200,14 @@ mod tests {
             FLAG.store(true, Ordering::SeqCst);
             Box::new(std::iter::empty())
         }
-        
+
         struct TestSpider {
             base_url: String,
         }
 
         impl Spider for TestSpider {
             fn start(&self) -> Box<dyn Iterator<Item = Request> + Send> {
-                let request = Request::get(&self.base_url)
-                    .with_callback(dummy_callback)
-                    .as_start();
+                let request = Request::get(&self.base_url).with_callback(dummy_callback);
                 Box::new(vec![request].into_iter())
             }
         }

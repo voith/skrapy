@@ -20,7 +20,6 @@ mod tests {
     struct MySpider;
 
     impl MySpider {
-
         fn parse(_response: Response) -> Box<dyn Iterator<Item = SpiderOutput> + Send> {
             let request = Request::new(
                 Url::parse("https://example.com/parsed").unwrap(),
