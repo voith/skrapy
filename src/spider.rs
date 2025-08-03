@@ -1,12 +1,14 @@
 use crate::{items::Item, request::Request};
 
+pub type CallbackReturn = Box<dyn Iterator<Item = SpiderOutput> + Send>;
+
 pub enum SpiderOutput {
     Item(Item),
     Request(Request),
 }
 
 pub trait Spider {
-    fn start(&self) -> Box<dyn Iterator<Item = Request> + Send>;
+    fn start(&self) -> CallbackReturn;
 }
 
 #[cfg(test)]
@@ -36,7 +38,7 @@ mod tests {
     }
 
     impl Spider for MySpider {
-        fn start(&self) -> Box<dyn Iterator<Item = Request> + Send> {
+        fn start(&self) -> CallbackReturn {
             let req1 = Request::new(
                 Url::parse("https://example.com/1").unwrap(),
                 Method::GET,
@@ -57,14 +59,14 @@ mod tests {
                 0,
                 true,
             );
-            Box::new(vec![req1, req2].into_iter())
+            Box::new(vec![SpiderOutput::Request(req1), SpiderOutput::Request(req2)].into_iter())
         }
     }
 
     #[test]
     fn test_spider_callback_execution() {
         let spider = MySpider;
-        let mut requests: Vec<Request> = spider.start().collect();
+        let mut requests: Vec<SpiderOutput> = spider.start().collect();
         assert_eq!(requests.len(), 2);
         let http_response = http::Response::builder()
             .status(200)
@@ -75,15 +77,18 @@ mod tests {
             request: Request::default(),
             res: reqwest_response,
         };
-        let callback = requests.remove(0).callback;
-
-        let results: Vec<SpiderOutput> = callback(dummy_response).collect();
-        assert_eq!(results.len(), 1);
-        match &results[0] {
-            SpiderOutput::Request(req) => {
-                assert_eq!(req.url.as_str(), "https://example.com/parsed");
+        if let SpiderOutput::Request(request) = requests.remove(0) {
+            let callback = request.callback;
+            let results: Vec<SpiderOutput> = callback(dummy_response).collect();
+            assert_eq!(results.len(), 1);
+            match &results[0] {
+                SpiderOutput::Request(req) => {
+                    assert_eq!(req.url.as_str(), "https://example.com/parsed");
+                }
+                _ => panic!("Expected a Request variant"),
             }
-            _ => panic!("Expected a Request variant"),
+        } else {
+            panic!("Expected a Spider::Request");
         }
     }
 }

@@ -1,13 +1,11 @@
 use crate::response::Response;
-use crate::spider::SpiderOutput;
+use crate::spider::CallbackReturn;
 use sha1::{Digest, Sha1};
 use std::cmp::PartialEq;
 use url::Url as UrlLib;
 
 // Imported here so that users can directly import from skrapy
 pub use reqwest::{Body, Method, Url, header::HeaderMap};
-
-pub type CallbackReturn = Box<dyn Iterator<Item = SpiderOutput> + Send>;
 
 #[derive(Debug)]
 pub struct Request {
@@ -117,6 +115,7 @@ impl Request {
         let callback_ptr = self.callback as usize;
 
         if callback_ptr == empty_ptr {
+            // TODO(Voith): return an Error
             panic!("ValidationError: Callback cannot be empty for {}", self.url);
         }
     }

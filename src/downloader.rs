@@ -110,7 +110,6 @@ impl DownloadManager {
 // TODO List
 // - Timeout Handling
 // - Download Delay
-// - Graceful Shutdown Signal
 // - logging
 impl Downloader {
     pub fn new(
@@ -377,7 +376,7 @@ mod tests {
         let (tx_res, _rx_res) = mpsc::channel(10);
         let result_tx = Arc::new(Mutex::new(tx_res));
 
-        let mut manager = DownloadManager::new(2, result_tx.clone());
+        let manager = DownloadManager::new(2, result_tx.clone());
 
         // Should be idle initially
         assert!(manager.is_idle());
@@ -414,7 +413,7 @@ mod tests {
 
         let (tx_res, mut rx_res) = mpsc::channel(10);
         let result_tx = Arc::new(Mutex::new(tx_res));
-        let mut manager = DownloadManager::new(2, result_tx.clone());
+        let manager = DownloadManager::new(2, result_tx.clone());
 
         // Enqueue multiple requests
         let num_requests = 5;
