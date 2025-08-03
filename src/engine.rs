@@ -102,12 +102,17 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::items::Item;
+    use crate::item_pipeline::JsonLinesExporter;
+    use crate::items::{Item, ItemBox};
     use crate::response::Response;
+    use crate::spider::SpiderSettings;
     use crate::spider::{CallbackReturn, Spider, SpiderOutput};
     use httpmock::Method::GET;
     use httpmock::MockServer;
+    use serde_json::json;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[tokio::test]
     async fn test_engine_handles_one_request_and_shuts_down() {
@@ -165,7 +170,8 @@ mod tests {
         // Callback that increments the coun
         fn counting_callback(_: Response) -> CallbackReturn {
             CALLBACK_COUNT.fetch_add(1, Ordering::SeqCst);
-            Box::new(std::iter::once(SpiderOutput::Item(Item::default())))
+            let item: ItemBox = Box::new(Item::default());
+            Box::new(std::iter::once(SpiderOutput::Item(item)))
         }
 
         struct BulkSpider {
@@ -193,5 +199,72 @@ mod tests {
 
         let count = CALLBACK_COUNT.load(Ordering::SeqCst);
         assert_eq!(count, 10);
+    }
+
+    #[tokio::test]
+    async fn test_engine_writes_item_to_file() {
+        // Helper to create a unique temp file path
+        fn unique_temp_path(name: &str) -> PathBuf {
+            let ts = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let pid = std::process::id();
+            std::env::temp_dir().join(format!("{name}_{pid}_{ts}.jsonl", name = name))
+        }
+
+        // Spider that emits one request and one item
+        struct FileSpider {
+            base_url: String,
+            file_path: std::path::PathBuf,
+        }
+
+        impl FileSpider {
+            fn callback(_: Response) -> CallbackReturn {
+                let item: ItemBox = Box::new(json!({"hello": "world"}));
+                Box::new(std::iter::once(SpiderOutput::Item(item)))
+            }
+        }
+
+        impl Spider for FileSpider {
+            fn settings(&self) -> SpiderSettings {
+                crate::spider::SpiderSettings {
+                    pipelines: vec![Box::new(JsonLinesExporter::new(self.file_path.clone()))],
+                }
+            }
+
+            fn start(&self) -> CallbackReturn {
+                let req = Request::get(&self.base_url).with_callback(Self::callback);
+                Box::new(std::iter::once(SpiderOutput::Request(req)))
+            }
+        }
+
+        // Start mock HTTP server
+        let server = httpmock::MockServer::start();
+        let _m = server.mock(|when, then| {
+            when.method(httpmock::Method::GET).path("/");
+            then.status(200).body("data");
+        });
+        let base_url = server.url("/");
+
+        // Prepare spider with a known file path
+        let path = unique_temp_path("engine_file_write");
+        let spider = Box::new(FileSpider {
+            base_url,
+            file_path: path.clone(),
+        });
+        let mut engine = Engine::new(spider);
+
+        // Run engine: download + callback + pipeline write
+        engine.run().await;
+
+        // Read and verify the JSONL output
+        let contents = tokio::fs::read_to_string(&path).await.unwrap();
+        // Should contain one line with {"hello":"world"}
+        assert!(
+            contents.contains(r#"{"hello":"world"}"#),
+            "File did not contain expected JSON, got: {}",
+            contents
+        );
     }
 }

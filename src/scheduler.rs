@@ -290,11 +290,16 @@ mod scheduler_tests {
         assert!(scheduler.enqueue_request(req.clone()));
 
         // Peek should return a reference to the same URL
-        let peeked = scheduler.peek_next_request().await.expect("Expected peek to return a request");
+        let peeked = scheduler
+            .peek_next_request()
+            .await
+            .expect("Expected peek to return a request");
         assert_eq!(peeked.url.as_str(), req.url.as_str());
 
         // next_request should return the same request
-        let next = scheduler.next_request().expect("Expected next_request to return a request");
+        let next = scheduler
+            .next_request()
+            .expect("Expected next_request to return a request");
         assert_eq!(next.url.as_str(), req.url.as_str());
     }
 }

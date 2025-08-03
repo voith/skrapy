@@ -1,14 +1,23 @@
-use crate::{items::Item, request::Request};
+use crate::{item_pipeline::Pipeline, items::ItemBox, request::Request};
 
 pub type CallbackReturn = Box<dyn Iterator<Item = SpiderOutput> + Send>;
 
 pub enum SpiderOutput {
-    Item(Item),
+    Item(ItemBox),
     Request(Request),
+}
+
+pub struct SpiderSettings {
+    pub pipelines: Vec<Box<dyn Pipeline>>,
 }
 
 pub trait Spider {
     fn start(&self) -> CallbackReturn;
+    fn settings(&self) -> SpiderSettings {
+        SpiderSettings {
+            pipelines: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 pub mod downloader;
 pub mod engine;
+pub mod item_pipeline;
 pub mod items;
 pub mod request;
 pub mod response;
