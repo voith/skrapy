@@ -109,12 +109,17 @@ impl Scheduler {
         }
     }
 
-    pub async fn next_request(&mut self) -> Option<Request> {
+    pub fn next_request(&mut self) -> Option<Request> {
         self.queue.pop()
     }
 
     pub fn has_pending_requests(&self) -> bool {
         !self.queue.is_empty()
+    }
+
+    /// Returns a reference to the next request without removing it.
+    pub async fn peek_next_request(&self) -> Option<&Request> {
+        self.queue.peek()
     }
 }
 
@@ -248,5 +253,48 @@ mod priority_queue_tests {
 
         queue.pop();
         assert!(queue.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod scheduler_tests {
+    use super::*;
+    use crate::request::{HeaderMap, Method};
+    use crate::response::Response;
+    use crate::spider::SpiderOutput;
+    use reqwest::Url;
+
+    // Dummy callback for building requests
+    fn dummy_callback(_: Response) -> Box<dyn Iterator<Item = SpiderOutput> + Send> {
+        Box::new(std::iter::empty())
+    }
+
+    // Constructs a simple Request with the dummy callback
+    fn dummy_request(url: &str) -> Request {
+        Request::new(
+            Url::parse(url).unwrap(),
+            Method::GET,
+            HeaderMap::new(),
+            "".into(),
+            dummy_callback,
+            0,
+            0,
+            false,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_peek_next_request_matches_next_request() {
+        let mut scheduler = Scheduler::new();
+        let req = dummy_request("http://example.com");
+        assert!(scheduler.enqueue_request(req.clone()));
+
+        // Peek should return a reference to the same URL
+        let peeked = scheduler.peek_next_request().await.expect("Expected peek to return a request");
+        assert_eq!(peeked.url.as_str(), req.url.as_str());
+
+        // next_request should return the same request
+        let next = scheduler.next_request().expect("Expected next_request to return a request");
+        assert_eq!(next.url.as_str(), req.url.as_str());
     }
 }

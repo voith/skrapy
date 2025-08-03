@@ -75,8 +75,10 @@ impl Engine {
                     self.scheduler.enqueue_request(request);
                 },
                 // fetch new requests
-                Some(request) = self.scheduler.next_request(), if !self.download_manager.needs_backoff() => {
-                    self.download_manager.enqueue_request(request).await;
+                Some(_) = self.scheduler.peek_next_request(), if !self.download_manager.needs_backoff() => {
+                    if let Some(request) = self.scheduler.next_request() {
+                        self.download_manager.enqueue_request(request).await;
+                    }
                 }
                 Some(download_output) = self.downloader_output_rx.recv() => {
                     match download_output {
