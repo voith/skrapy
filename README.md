@@ -28,7 +28,6 @@
 Below is a working example of a simple spider scraping [Quotes to Scrape](https://quotes.toscrape.com/):
 
 ```rust
-use scraper::{Html, Selector};
 use serde_json::json;
 use skrapy::{
     engine::Engine,
@@ -54,6 +53,7 @@ struct QuotesSpider {
 
 impl Spider for QuotesSpider {
     fn settings(&self) -> SpiderSettings {
+        // Create a JsonLinesExporter writing to "./quotes.json" in the current working directory
         let file_path: PathBuf = env::current_dir()
             .expect("failed to get current directory")
             .join("quotes.json");
@@ -75,38 +75,38 @@ impl QuotesSpider {
     }
 
     fn parse(response: Response) -> CallbackReturn {
-        let document = Html::parse_document(&response.text);
-        let quote_sel = Selector::parse("div.quote").unwrap();
-        let author_sel = Selector::parse("span > small").unwrap();
-        let text_sel = Selector::parse("span.text").unwrap();
-
-        let items_iter = document.select(&quote_sel).map(|quote_elem| {
-            let author = quote_elem
-                .select(&author_sel)
+        let quote_list = response.xpath("//div[@class='quote']");
+        let mut outputs = Vec::new();
+        for quote in quote_list.into_iter() {
+            let author = quote
+                .xpath("span/small/text()")
+                .extract()
+                .into_iter()
                 .next()
-                .map(|e| e.text().collect::<String>())
                 .unwrap_or_default();
-            let text = quote_elem
-                .select(&text_sel)
+            let text = quote
+                .xpath("span[@class='text']/text()")
+                .extract()
+                .into_iter()
                 .next()
-                .map(|e| e.text().collect::<String>())
                 .unwrap_or_default();
             let item: ItemBox = Box::new(json!({ "author": author, "text": text }));
-            SpiderOutput::Item(item)
-        });
+            outputs.push(SpiderOutput::Item(item));
+        }
 
-        let next_sel = Selector::parse("li.next a").unwrap();
-        let next_iter = document
-            .select(&next_sel)
-            .filter_map(|a_elem| a_elem.value().attr("href"))
-            .take(1)
-            .map(|href| {
-                let next_url = join_url("https://quotes.toscrape.com/", href);
-                let req = Request::get(&next_url).with_callback(Self::parse);
-                SpiderOutput::Request(req)
-            });
+        // Handle pagination
+        if let Some(href) = response
+            .xpath("//li[@class='next']/a/@href")
+            .extract()
+            .into_iter()
+            .next()
+        {
+            let next_url = join_url("https://quotes.toscrape.com/", &href);
+            let req = Request::get(&next_url).with_callback(Self::parse);
+            outputs.push(SpiderOutput::Request(req));
+        }
 
-        Box::new(items_iter.chain(next_iter))
+        Box::new(outputs.into_iter())
     }
 }
 
