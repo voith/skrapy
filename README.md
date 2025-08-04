@@ -6,15 +6,6 @@
 
 ---
 
-## ✨ Goals
-
-- Learn and apply Rust async programming with `tokio`
-- Design an idiomatic Rust crate inspired by Scrapy
-- Explore how to build an event-driven spider engine
-- Modular components: `Request`, `Response`, `Spider`, `Item`, etc.
-
----
-
 ## 🧠 Design Inspirations
 
 - **Scrapy**: the original inspiration for the callback-driven spider and pipelines
@@ -131,12 +122,11 @@ cargo test
 
 ---
 
-## 📚 Learning Notes
-
-This project is a sandbox to:
-- Practice Rust's ownership model in async contexts
-- Understand channels, `Arc`, and lifetimes with task queues
-- Explore trait-based plugin systems
+## 📚 Learning Goals
+- [x] Learn and apply Rust async programming with `tokio`
+- [x] Design an idiomatic Rust crate inspired by Scrapy
+- [x] Explore how to build an event-driven spider engine
+- [x] Modular components: `Request`, `Response`, `Spider`, `Item`, etc.
 
 ---
 
