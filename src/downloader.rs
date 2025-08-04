@@ -1,7 +1,7 @@
 use crate::request::Request;
+use bytes::Bytes;
 use reqwest::Client;
 use reqwest::Response as ReqwestResponse;
-use bytes::Bytes;
 use reqwest::header::HeaderMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -213,6 +213,7 @@ impl Downloader {
 mod tests {
     use super::{DownloadManager, Downloader};
     use crate::request::{Body, Request};
+    use crate::spider::CallbackReturn;
     use httpmock::{Method::GET, MockServer};
     use reqwest::Client;
     use reqwest::header::HeaderMap;
@@ -223,9 +224,7 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::time::{Duration, timeout};
 
-    fn dummy_callback(
-        _: crate::response::Response,
-    ) -> Box<dyn Iterator<Item = crate::spider::SpiderOutput> + Send> {
+    fn dummy_callback(_: crate::response::Response) -> CallbackReturn {
         Box::new(std::iter::empty())
     }
 

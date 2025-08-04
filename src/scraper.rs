@@ -204,11 +204,11 @@ impl SpiderOutputProcessorWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
     use http::Response as HttpResponse;
     use reqwest::Response as ReqwestResponse;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::sync::mpsc;
-    use bytes::Bytes;
 
     // Dummy spider that yields no start requests
     struct DummySpider;
@@ -261,7 +261,7 @@ mod tests {
             status: reqwest_res.status(),
             headers: reqwest_res.headers().clone(),
             body: Bytes::new(),
-            text: "".to_string()
+            text: "".to_string(),
         };
 
         let (tx, _rx) = mpsc::channel(1);
@@ -294,7 +294,7 @@ mod tests {
             status: reqwest_res.status(),
             headers: reqwest_res.headers().clone(),
             body: Bytes::new(),
-            text: "".to_string()
+            text: "".to_string(),
         };
 
         let (tx, mut rx) = mpsc::channel(1);

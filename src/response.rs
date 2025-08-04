@@ -53,7 +53,7 @@ mod tests {
             status: reqwest_response.status(),
             headers: reqwest_response.headers().clone(),
             body: Bytes::new(),
-            text: "".to_string()
+            text: "".to_string(),
         };
 
         // Convert DownloadResult into Response

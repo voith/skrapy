@@ -129,10 +129,10 @@ mod dupefilter_tests {
     use crate::request::Request;
     use crate::request::{HeaderMap, Method};
     use crate::response::Response;
-    use crate::spider::SpiderOutput;
+    use crate::spider::CallbackReturn;
     use reqwest::Url;
 
-    fn dummy_callback(_: Response) -> Box<dyn Iterator<Item = SpiderOutput> + Send> {
+    fn dummy_callback(_: Response) -> CallbackReturn {
         Box::new(std::iter::empty())
     }
 
@@ -169,10 +169,10 @@ mod priority_queue_tests {
     use super::*;
     use crate::request::{HeaderMap, Method};
     use crate::response::Response;
-    use crate::spider::SpiderOutput;
+    use crate::spider::CallbackReturn;
     use reqwest::Url;
 
-    fn dummy_callback(_: Response) -> Box<dyn Iterator<Item = SpiderOutput> + Send> {
+    fn dummy_callback(_: Response) -> CallbackReturn {
         Box::new(std::iter::empty())
     }
 
@@ -261,11 +261,11 @@ mod scheduler_tests {
     use super::*;
     use crate::request::{HeaderMap, Method};
     use crate::response::Response;
-    use crate::spider::SpiderOutput;
+    use crate::spider::CallbackReturn;
     use reqwest::Url;
 
     // Dummy callback for building requests
-    fn dummy_callback(_: Response) -> Box<dyn Iterator<Item = SpiderOutput> + Send> {
+    fn dummy_callback(_: Response) -> CallbackReturn {
         Box::new(std::iter::empty())
     }
 
