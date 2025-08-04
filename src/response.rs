@@ -5,6 +5,7 @@ use libxml::parser::Parser;
 use libxml::tree::{Document, Node};
 use libxml::xpath::Context;
 use reqwest::header::HeaderMap;
+use std::fmt;
 use std::sync::Arc;
 
 pub struct Response {
@@ -31,6 +32,18 @@ impl Response {
     /// Run an XPath query on this Response's HTML, returning a Selector for chaining.
     pub fn xpath(&self, expr: &str) -> SelectorList {
         Selector::from_response(self).xpath(expr)
+    }
+}
+
+impl fmt::Display for Response {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<{} {}>", &self.status, &self.request.url)
+    }
+}
+
+impl std::fmt::Debug for Response {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self) // delegate to your Display impl
     }
 }
 

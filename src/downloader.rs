@@ -112,10 +112,10 @@ impl DownloadManager {
     }
 }
 
-// TODO List
-// - Timeout Handling
-// - Download Delay
-// - logging
+// TODO(Voith):
+// - Add Download Delay
+// - Add Download MiddleWare
+// - Add Builtin Download MiddleWares for retrying requests
 impl Downloader {
     pub fn new(
         client: Client,
@@ -174,7 +174,7 @@ impl Downloader {
                             match response.bytes().await {
                                 Ok(body) => {
                                     // Convert bytes to UTF-8 text
-                                    println!("downloaded request: {}", &req.url);
+                                    log::debug!("downloaded request: {:?}", &req);
                                     let text = String::from_utf8_lossy(&body).to_string();
                                     let result = DownloadResult {
                                         request: req,

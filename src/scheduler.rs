@@ -2,7 +2,7 @@ use crate::request::Request;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 struct PrioritizedRequest {
     priority: i32,
     request: Request,
@@ -105,7 +105,7 @@ impl Scheduler {
             self.queue.push(request);
             true
         } else {
-            println!("dropping duplicate request: {}", &request.url);
+            log::warn!("dropping duplicate request: {}", &request.url);
             false
         }
     }

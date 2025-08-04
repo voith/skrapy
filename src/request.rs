@@ -2,12 +2,12 @@ use crate::response::Response;
 use crate::spider::CallbackReturn;
 use sha1::{Digest, Sha1};
 use std::cmp::PartialEq;
+use std::fmt;
 use url::Url as UrlLib;
 
 // Imported here so that users can directly import from skrapy
 pub use reqwest::{Body, Method, Url, header::HeaderMap};
 
-#[derive(Debug)]
 pub struct Request {
     pub url: Url,
     pub method: Method,
@@ -17,7 +17,7 @@ pub struct Request {
     _internal_meta_data: InternalRequestMetaData,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct InternalRequestMetaData {
     priority: i32,
     retry_count: i8,
@@ -174,6 +174,18 @@ impl Clone for Request {
             callback: self.callback,
             _internal_meta_data: self._internal_meta_data.clone(),
         }
+    }
+}
+
+impl fmt::Display for Request {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<{} {}>", &self.method, &self.url)
+    }
+}
+
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self) // delegate to your Display impl
     }
 }
 

@@ -60,19 +60,18 @@ impl PipelineManager {
 
     /// Run the item through each pipeline in order.
     /// Returns Ok(Some(item)) if it survives all pipelines, or Ok(None) if dropped.
-    pub async fn process(&self, mut item: ItemBox) -> Result<Option<ItemBox>, PipelineError> {
+    pub async fn process(&self, mut item: ItemBox) -> Result<ItemBox, PipelineError> {
         for p in &self.pipes {
             match p.process(item).await? {
                 PipelineOutcome::Continue(next) => {
                     item = next;
                 }
                 PipelineOutcome::Drop(_why) => {
-                    return Ok(None);
+                    return Err(PipelineError::Drop(_why));
                 }
             }
         }
-        println!("Scraped item: {:?}", &item);
-        Ok(Some(item))
+        Ok(item)
     }
 
     pub async fn close(&self) -> Result<(), PipelineError> {
@@ -149,7 +148,7 @@ impl Pipeline for JsonLinesExporter {
             .await
             .map_err(|e| PipelineError::Other(AnyError::from(e)))?;
         *self.file.lock().await = Some(file);
-        println!("Opened file: {:?} to write items in json.", &self.path);
+        log::debug!("Opened file: {:?} to write items in json.", &self.path);
         Ok(())
     }
 
@@ -174,12 +173,12 @@ impl Pipeline for JsonLinesExporter {
         }
 
         // Exporters usually consume the item (nothing more to do downstream)
-        Ok(PipelineOutcome::Drop("exported".into()))
+        Ok(PipelineOutcome::Continue(item))
     }
 
     async fn close(&self) -> Result<(), PipelineError> {
         *self.file.lock().await = None; // drop handle
-        println!("Wrote items to file: {:?}", &self.path);
+        log::debug!("Wrote items to file: {:?}", &self.path);
         Ok(())
     }
 }
@@ -267,8 +266,13 @@ mod tests {
 
         let item: ItemBox = Box::new(json!({"title":"Gadget","price":1.23}));
         match exporter.process(item).await.unwrap() {
-            PipelineOutcome::Drop(reason) => assert_eq!(reason, "exported"),
-            _ => panic!("exporter should Drop after writing"),
+            PipelineOutcome::Continue(processed_item) => {
+                // Cannot compare ItemBox directly; verify via JSON
+                let v = item_to_json_value(&processed_item).unwrap();
+                assert_eq!(v["title"], json!("Gadget"));
+                assert_eq!(v["price"], json!(1.23));
+            }
+            _ => panic!("exporter should Continue after writing"),
         }
 
         exporter.close().await.unwrap();
@@ -314,10 +318,10 @@ mod tests {
 
         mgr.open().await.unwrap();
         let item: ItemBox = Box::new(json!({"a":1}));
-        let out = mgr.process(item).await.unwrap();
+        let out = mgr.process(item).await;
         mgr.close().await.unwrap();
 
-        assert!(out.is_none(), "item should be dropped by Dropper");
+        assert!(out.is_err(), "item should be dropped by Dropper");
         assert_eq!(
             hits.load(Ordering::SeqCst),
             1,
@@ -351,7 +355,7 @@ mod tests {
         ]);
         mgr.open().await.unwrap();
         let item: ItemBox = Box::new(json!({"title":"T"}));
-        let out = mgr.process(item).await.unwrap().unwrap();
+        let out = mgr.process(item).await.unwrap();
         mgr.close().await.unwrap();
 
         let v = item_to_json_value(&out).unwrap();

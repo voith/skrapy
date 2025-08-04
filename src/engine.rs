@@ -1,4 +1,5 @@
 use crate::downloader::{DownloadError, DownloadManager, DownloadResult};
+use crate::logger;
 use crate::request::Request;
 use crate::scheduler::Scheduler;
 use crate::scraper::Scraper;
@@ -16,6 +17,7 @@ pub struct Engine {
     downloader_output_rx: mpsc::Receiver<Result<DownloadResult, DownloadError>>,
     spider_request_rx: mpsc::Receiver<Request>,
     shutdown: CancellationToken,
+    log_level: log::LevelFilter,
 }
 
 impl Engine {
@@ -23,7 +25,7 @@ impl Engine {
     const CONCURRENCY_LIMIT: usize = 8;
     const DOWNLOADER_OUTPUT_QUEUE: usize = Self::CONCURRENCY_LIMIT * 100;
 
-    pub fn new(spider: Box<dyn Spider>) -> Self {
+    pub fn new(spider: Box<dyn Spider>, log_level: log::LevelFilter) -> Self {
         let (downloader_output_tx, downloader_output_rx) =
             mpsc::channel(Self::DOWNLOADER_OUTPUT_QUEUE);
         let (spider_request_tx, spider_request_rx) = mpsc::channel(Self::SCRAPER_QUEUE_SIZE);
@@ -40,6 +42,7 @@ impl Engine {
             downloader_output_rx,
             spider_request_rx,
             shutdown,
+            log_level,
         }
     }
 
@@ -50,27 +53,28 @@ impl Engine {
             && self.downloader_output_rx.is_empty()
             && self.spider_request_rx.is_empty()
         {
-            println!("finished scraping...");
+            log::info!("finished scraping...");
             self.shutdown.cancel();
         }
     }
 
-    pub async fn run(&mut self) {
+    pub async fn run(&mut self) -> anyhow::Result<()> {
+        logger::init_logger(self.log_level)?;
         self.scraper.start_spider().await;
         let mut idle_interval = tokio::time::interval(Duration::from_millis(100));
         loop {
             tokio::select! {
                 // Shutdown on Ctrl+C (SIGINT)
                 _ = signal::ctrl_c() => {
-                    println!("Received Ctrl+C, shutting down engine");
+                    log::warn!("Received Ctrl+C, shutting down engine");
                     self.shutdown.cancel();
                 },
                 // Stop when Shutdown
                 _ = self.shutdown.cancelled() => {
-                    println!("stopping engine");
+                    log::info!("stopping engine");
                     self.download_manager.stop().await;
                     self.scraper.stop().await;
-                    break;
+                    break anyhow::Ok(())?;
                 },
                 Some(request) = self.spider_request_rx.recv() => {
                     self.scheduler.enqueue_request(request);
@@ -86,9 +90,9 @@ impl Engine {
                         Ok(download_result) => {
                             self.scraper.process_response(download_result).await;
                         }
-                        Err(_download_error) => {
+                        Err(download_error) => {
                             //TODO(Voith): Handle Download Error
-                            println!("Encountered download error");
+                            log::error!("Encountered download error for request: {:?}", &download_error.request);
                         }
                     }
                 },
@@ -97,6 +101,7 @@ impl Engine {
             // shudown if idle
             self.shutdown_if_idle();
         }
+        Ok(())
     }
 }
 
@@ -147,10 +152,10 @@ mod tests {
         let spider = Box::new(TestSpider {
             base_url: server.url("/"),
         });
-        let mut engine = Engine::new(spider);
+        let mut engine = Engine::new(spider, log::LevelFilter::Info);
 
         // Run the engine; it should process the one request and then shut itself down
-        engine.run().await;
+        let _ = engine.run().await;
 
         // Verify that our callback was invoked
         assert!(FLAG.load(Ordering::SeqCst), "Callback was not triggered");
@@ -195,8 +200,8 @@ mod tests {
         let spider = Box::new(BulkSpider {
             base_url: server_url.clone(),
         });
-        let mut engine = Engine::new(spider);
-        engine.run().await;
+        let mut engine = Engine::new(spider, log::LevelFilter::Info);
+        let _ = engine.run().await;
 
         let count = CALLBACK_COUNT.load(Ordering::SeqCst);
         assert_eq!(count, 10);
@@ -254,10 +259,10 @@ mod tests {
             base_url,
             file_path: path.clone(),
         });
-        let mut engine = Engine::new(spider);
+        let mut engine = Engine::new(spider, log::LevelFilter::Info);
 
         // Run engine: download + callback + pipeline write
-        engine.run().await;
+        let _ = engine.run().await;
 
         // Read and verify the JSONL output
         let contents = tokio::fs::read_to_string(&path).await.unwrap();

@@ -102,10 +102,11 @@ impl QuotesSpider {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let spider = QuotesSpider::new("https://quotes.toscrape.com/".to_string());
-    let mut engine = Engine::new(Box::new(spider));
-    engine.run().await;
+    let mut engine = Engine::new(Box::new(spider), log::LevelFilter::Debug);
+    engine.run().await?;
+    Ok(())
 }
 ```
 

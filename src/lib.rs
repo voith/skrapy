@@ -2,6 +2,7 @@ pub mod downloader;
 pub mod engine;
 pub mod item_pipeline;
 pub mod items;
+mod logger;
 pub mod request;
 pub mod response;
 pub mod scheduler;
