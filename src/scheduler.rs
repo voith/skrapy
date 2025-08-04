@@ -105,6 +105,7 @@ impl Scheduler {
             self.queue.push(request);
             true
         } else {
+            println!("dropping duplicate request: {}", &request.url);
             false
         }
     }

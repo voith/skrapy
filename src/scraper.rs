@@ -54,6 +54,7 @@ impl Scraper {
     }
 
     pub async fn start_spider(&self) {
+        println!("starting spider...");
         let _ = self.item_pipeline_manager.lock().await.open().await;
         let spider_output = self.spider.start();
         self.spider_output_processor

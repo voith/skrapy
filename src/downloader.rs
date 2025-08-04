@@ -174,6 +174,7 @@ impl Downloader {
                             match response.bytes().await {
                                 Ok(body) => {
                                     // Convert bytes to UTF-8 text
+                                    println!("downloaded request: {}", &req.url);
                                     let text = String::from_utf8_lossy(&body).to_string();
                                     let result = DownloadResult {
                                         request: req,

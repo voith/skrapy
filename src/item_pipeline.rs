@@ -71,6 +71,7 @@ impl PipelineManager {
                 }
             }
         }
+        println!("Scraped item: {:?}", &item);
         Ok(Some(item))
     }
 
@@ -148,6 +149,7 @@ impl Pipeline for JsonLinesExporter {
             .await
             .map_err(|e| PipelineError::Other(AnyError::from(e)))?;
         *self.file.lock().await = Some(file);
+        println!("Opened file: {:?} to write items in json.", &self.path);
         Ok(())
     }
 
@@ -177,6 +179,7 @@ impl Pipeline for JsonLinesExporter {
 
     async fn close(&self) -> Result<(), PipelineError> {
         *self.file.lock().await = None; // drop handle
+        println!("Wrote items to file: {:?}", &self.path);
         Ok(())
     }
 }

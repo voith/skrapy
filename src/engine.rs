@@ -50,6 +50,7 @@ impl Engine {
             && self.downloader_output_rx.is_empty()
             && self.spider_request_rx.is_empty()
         {
+            println!("finished scraping...");
             self.shutdown.cancel();
         }
     }
