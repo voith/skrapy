@@ -1,17 +1,24 @@
 use crate::downloader::DownloadResult;
 use crate::request::Request;
-use reqwest::Response as ReqwestResponse;
+use bytes::Bytes;
+use reqwest::header::HeaderMap;
 
 pub struct Response {
     pub request: Request,
-    pub res: ReqwestResponse,
+    pub status: reqwest::StatusCode,
+    pub headers: HeaderMap,
+    pub body: Bytes,
+    pub text: String,
 }
 
 impl From<DownloadResult> for Response {
     fn from(download_result: DownloadResult) -> Self {
         Response {
             request: download_result.request,
-            res: download_result.response,
+            status: download_result.status,
+            headers: download_result.headers,
+            body: download_result.body,
+            text: download_result.text,
         }
     }
 }
@@ -43,7 +50,10 @@ mod tests {
         // Create a DownloadResult
         let download_result = DownloadResult {
             request: request.clone(),
-            response: reqwest_response,
+            status: reqwest_response.status(),
+            headers: reqwest_response.headers().clone(),
+            body: Bytes::new(),
+            text: "".to_string()
         };
 
         // Convert DownloadResult into Response

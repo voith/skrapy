@@ -27,6 +27,7 @@ mod tests {
     use crate::response::Response;
     use reqwest::{Body, Method, header::HeaderMap};
     use url::Url;
+    use bytes::Bytes;
 
     struct MySpider;
 
@@ -84,7 +85,10 @@ mod tests {
         let reqwest_response = reqwest::Response::from(http_response);
         let dummy_response = Response {
             request: Request::default(),
-            res: reqwest_response,
+            status: reqwest_response.status(),
+            headers: reqwest_response.headers().clone(),
+            body: Bytes::new(),
+            text: "".to_string()
         };
         if let SpiderOutput::Request(request) = requests.remove(0) {
             let callback = request.callback;

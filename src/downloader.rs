@@ -1,6 +1,8 @@
 use crate::request::Request;
 use reqwest::Client;
 use reqwest::Response as ReqwestResponse;
+use bytes::Bytes;
+use reqwest::header::HeaderMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Mutex, mpsc};
@@ -8,7 +10,10 @@ use tokio::task::JoinHandle;
 
 pub struct DownloadResult {
     pub request: Request,
-    pub response: ReqwestResponse,
+    pub status: reqwest::StatusCode,
+    pub headers: HeaderMap,
+    pub body: Bytes,
+    pub text: String,
 }
 
 /// Wraps low-level HTTP errors.
@@ -162,11 +167,31 @@ impl Downloader {
                     self.active_count.fetch_add(1, Ordering::SeqCst);
                     match self.download(&req).await {
                         Ok(response) => {
-                            let result = DownloadResult {
-                                request: req,
-                                response,
-                            };
-                            let _ = self.result_tx.lock().await.send(Ok(result)).await;
+                            // Extract metadata
+                            let status = response.status();
+                            let headers = response.headers().clone();
+                            // Read full body into bytes
+                            match response.bytes().await {
+                                Ok(body) => {
+                                    // Convert bytes to UTF-8 text
+                                    let text = String::from_utf8_lossy(&body).to_string();
+                                    let result = DownloadResult {
+                                        request: req,
+                                        status,
+                                        headers,
+                                        body: body.clone(),
+                                        text: text,
+                                    };
+                                    let _ = self.result_tx.lock().await.send(Ok(result)).await;
+                                }
+                                Err(err) => {
+                                    let dl_err = DownloadError {
+                                        request: req,
+                                        error: HttpError { source: err },
+                                    };
+                                    let _ = self.result_tx.lock().await.send(Err(dl_err)).await;
+                                }
+                            }
                         }
                         Err(err) => {
                             let dl_err = DownloadError {
@@ -243,7 +268,7 @@ mod tests {
                 .expect("response channel closed");
             match download_result {
                 Ok(res) => {
-                    assert_eq!(res.response.status(), 200);
+                    assert_eq!(res.status, 200);
                     assert_eq!(
                         res.request.url.as_str(),
                         &format!("{}/test", server.base_url())
@@ -364,7 +389,7 @@ mod tests {
 
         if let Ok(Some(Ok(dl_res))) = timeout(Duration::from_secs(1), rx_res.recv()).await {
             assert_eq!(dl_res.request.url, request.url);
-            let body = dl_res.response.text().await.unwrap();
+            let body = dl_res.text;
             assert_eq!(body, "data");
         } else {
             panic!("Expected a DownloadResult");

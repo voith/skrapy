@@ -208,6 +208,7 @@ mod tests {
     use reqwest::Response as ReqwestResponse;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::sync::mpsc;
+    use bytes::Bytes;
 
     // Dummy spider that yields no start requests
     struct DummySpider;
@@ -257,7 +258,10 @@ mod tests {
         let reqwest_res = ReqwestResponse::from(http_res);
         let download_result = DownloadResult {
             request: req,
-            response: reqwest_res,
+            status: reqwest_res.status(),
+            headers: reqwest_res.headers().clone(),
+            body: Bytes::new(),
+            text: "".to_string()
         };
 
         let (tx, _rx) = mpsc::channel(1);
@@ -287,7 +291,10 @@ mod tests {
         let reqwest_res = ReqwestResponse::from(http_res);
         let download_result = DownloadResult {
             request: req,
-            response: reqwest_res,
+            status: reqwest_res.status(),
+            headers: reqwest_res.headers().clone(),
+            body: Bytes::new(),
+            text: "".to_string()
         };
 
         let (tx, mut rx) = mpsc::channel(1);
