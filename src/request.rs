@@ -147,7 +147,7 @@ impl Request {
         self._internal_meta_data.retry_count
     }
 
-    pub fn increment_retry_count(mut self) {
+    pub fn increment_retry_count(&mut self) {
         self._internal_meta_data.retry_count += 1;
     }
 }
@@ -212,10 +212,14 @@ pub fn canonicalize_url(input: &str) -> Option<String> {
             .filter(|(_, v)| !v.is_empty())
             .collect();
         pairs.sort();
-        let new_query = url::form_urlencoded::Serializer::new(String::new())
-            .extend_pairs(pairs)
-            .finish();
-        url.set_query(Some(&new_query));
+        if !pairs.is_empty() {
+            let new_query = url::form_urlencoded::Serializer::new(String::new())
+                .extend_pairs(pairs)
+                .finish();
+            url.set_query(Some(&new_query));
+        } else {
+            url.set_query(None);
+        }
     }
 
     Some(url.to_string())
@@ -403,5 +407,225 @@ mod test {
     fn test_validate_panics_on_empty_callback() {
         let req = Request::default();
         req.validate();
+    }
+
+    #[test]
+    fn test_increment_retry_count_increments() {
+        let mut req = Request::default();
+        assert_eq!(req.retry_count(), 0);
+        // This test will catch if increment_retry_count does not mutate the original
+        req.increment_retry_count();
+        assert_eq!(req.retry_count(), 1);
+    }
+
+    #[test]
+    fn test_validate_ok_with_non_empty_callback() {
+        fn cb(_: Response) -> CallbackReturn {
+            Box::new(std::iter::empty())
+        }
+        let req = Request::get("http://example.com").with_callback(cb);
+        // Should not panic
+        req.validate();
+    }
+
+    #[test]
+    fn test_is_start_request_default_false() {
+        let req = Request::default();
+        assert!(!req.is_start_request());
+    }
+
+    #[test]
+    fn test_priority_from_new() {
+        fn cb(_: Response) -> CallbackReturn {
+            Box::new(std::iter::empty())
+        }
+        let req = Request::new(
+            Url::parse("http://example.com/").unwrap(),
+            Method::GET,
+            HeaderMap::new(),
+            Body::default(),
+            cb,
+            42,
+            0,
+            false,
+        );
+        assert_eq!(req.priority(), 42);
+    }
+
+    #[test]
+    fn test_chaining_with_callback_then_as_start() {
+        fn cb(_: Response) -> CallbackReturn {
+            Box::new(std::iter::empty())
+        }
+        let req = Request::get("http://example.com")
+            .with_callback(cb)
+            .as_start();
+        assert_eq!(req.callback as usize, cb as usize);
+        assert!(req.is_start_request());
+    }
+
+    #[test]
+    fn test_clone_behavior() {
+        fn cb(_: Response) -> CallbackReturn {
+            Box::new(std::iter::empty())
+        }
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Test", "1".parse().unwrap());
+        let req1 = Request::new(
+            Url::parse("http://example.com/path").unwrap(),
+            Method::POST,
+            headers,
+            Body::from("payload"),
+            cb,
+            0,
+            0,
+            false,
+        );
+        let req2 = req1.clone();
+        assert_eq!(req1.fingerprint(), req2.fingerprint());
+        assert_eq!(req1.body.as_bytes().unwrap(), req2.body.as_bytes().unwrap());
+        assert_eq!(req1.callback as usize, req2.callback as usize);
+        // headers cloned, not moved
+        assert!(req2.headers.get("X-Test").is_some());
+    }
+
+    #[test]
+    fn test_headers_ignored_in_equality() {
+        fn cb(_: Response) -> CallbackReturn {
+            Box::new(std::iter::empty())
+        }
+        let mut h1 = HeaderMap::new();
+        h1.insert("A", "1".parse().unwrap());
+        let mut h2 = HeaderMap::new();
+        h2.insert("B", "2".parse().unwrap());
+        let r1 = Request::new(
+            Url::parse("http://example.com/").unwrap(),
+            Method::GET,
+            h1,
+            Body::default(),
+            cb,
+            0,
+            0,
+            false,
+        );
+        let r2 = Request::new(
+            Url::parse("http://example.com/").unwrap(),
+            Method::GET,
+            h2,
+            Body::default(),
+            cb,
+            0,
+            0,
+            false,
+        );
+        assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn test_method_affects_equality() {
+        let url = Url::parse("http://example.com/").unwrap();
+        let r_get = Request {
+            url: url.clone(),
+            method: Method::GET,
+            ..Default::default()
+        };
+        let r_post = Request {
+            url,
+            method: Method::POST,
+            ..Default::default()
+        };
+        assert_ne!(r_get, r_post);
+    }
+
+    #[test]
+    fn test_body_empty_vs_default_equal() {
+        let r1 = Request {
+            body: Body::default(),
+            ..Default::default()
+        };
+        let r2 = Request {
+            body: Body::from(""),
+            ..Default::default()
+        };
+        assert_eq!(r1, r2);
+    }
+
+    #[test]
+    fn test_canonical_url_invalid_returns_none() {
+        assert_eq!(canonicalize_url("http://exa mple.com"), None);
+    }
+
+    #[test]
+    fn test_canonical_url_https_default_port_removed() {
+        let u1 = canonicalize_url("https://example.com:443/a?b=1");
+        let u2 = canonicalize_url("https://example.com/a?b=1");
+        assert_eq!(u1, u2);
+    }
+
+    #[test]
+    fn test_canonical_url_non_default_port_preserved() {
+        let u1 = canonicalize_url("http://example.com:8080/a");
+        let u2 = canonicalize_url("http://example.com/a");
+        assert_ne!(u1, u2);
+    }
+
+    #[test]
+    fn test_canonical_url_path_case_sensitivity() {
+        // host case-insensitive
+        let u1 = canonicalize_url("http://EXAMPLE.com/Foo").unwrap();
+        let u2 = canonicalize_url("http://example.com/Foo").unwrap();
+        assert_eq!(u1, u2);
+        // path is case-sensitive
+        let u3 = canonicalize_url("http://example.com/Foo").unwrap();
+        let u4 = canonicalize_url("http://example.com/foo").unwrap();
+        assert_ne!(u3, u4);
+    }
+
+    #[test]
+    fn test_canonical_url_all_blank_params_removed() {
+        let u = canonicalize_url("http://example.com/?a=&b=").unwrap();
+        assert_eq!(u, "http://example.com/");
+    }
+
+    #[test]
+    fn test_display_format_and_debug() {
+        let req = Request::get("http://example.com/");
+        let disp = format!("{}", req);
+        assert_eq!(disp, "<GET http://example.com/>");
+        let dbg = format!("{:?}", req);
+        assert_eq!(dbg, disp);
+    }
+
+    #[test]
+    fn test_get_post_defaults_without_callback() {
+        let get = Request::get("http://example.com/");
+        assert_eq!(get.method, Method::GET);
+        assert!(get.headers.is_empty());
+        assert_eq!(get.body.as_bytes().unwrap(), b"");
+        assert!(!get.is_start_request());
+        assert_eq!(get.retry_count(), 0);
+        assert_eq!(get.priority(), 0);
+
+        let post = Request::post("http://example.com/");
+        assert_eq!(post.method, Method::POST);
+        assert!(post.headers.is_empty());
+        assert_eq!(post.body.as_bytes().unwrap(), b"");
+        assert!(!post.is_start_request());
+        assert_eq!(post.retry_count(), 0);
+        assert_eq!(post.priority(), 0);
+    }
+
+    #[test]
+    fn test_fragments_affect_fingerprint_current_behavior() {
+        // Current canonicalize_url keeps fragments, so fingerprints should differ
+        let r1 = Request {
+            url: Url::parse("http://example.com/a#x").unwrap(),
+            ..Default::default()
+        };
+        let r2 = Request {
+            url: Url::parse("http://example.com/a#y").unwrap(),
+            ..Default::default()
+        };
+        assert_ne!(r1, r2);
     }
 }
