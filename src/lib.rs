@@ -1,3 +1,4 @@
+pub mod download_middleware;
 pub mod downloader;
 pub mod engine;
 pub mod item_pipeline;
