@@ -125,10 +125,7 @@ impl DownloadManager {
     }
 }
 
-// TODO(Voith):
-// - Add Download Delay
-// - Add Download MiddleWare
-// - Add Builtin Download MiddleWares for retrying requests
+// TODO(Voith): Add download delay between requests
 impl Downloader {
     pub fn new(
         client: Client,
