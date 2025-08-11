@@ -2,7 +2,7 @@
 
 # 🕷️ Skrapy
 
-**Skrapy** is an experimental, async web scraping framework written in Rust — inspired by Python's [Scrapy](https://scrapy.org). It's built using `tokio` and serves as a personal learning project to explore Rust async, task scheduling, and modular crawling architectures.
+**Skrapy** is an experimental, async web scraping framework written in Rust, inspired by Python's [Scrapy](https://scrapy.org). It's built using `tokio` and serves as a personal learning project to explore Rust async, task scheduling, and modular crawling architectures.
 
 ---
 

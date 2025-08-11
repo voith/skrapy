@@ -120,6 +120,9 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::task::JoinHandle;
 
     #[tokio::test]
     async fn test_engine_handles_one_request_and_shuts_down() {
@@ -274,10 +277,6 @@ mod tests {
             contents
         );
     }
-
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
-    use tokio::task::JoinHandle;
 
     #[tokio::test]
     async fn engine_retry_middleware_invokes_expected_callbacks() {
