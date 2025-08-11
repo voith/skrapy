@@ -2,16 +2,24 @@
 use chrono::Local;
 use fern::colors::{Color, ColoredLevelConfig};
 use log::LevelFilter;
+use std::sync::OnceLock;
+
+static LOGGER_STARTED: OnceLock<()> = OnceLock::new();
 
 pub fn init_logger(level: LevelFilter) -> Result<(), fern::InitError> {
+    // If already initialized, just update the max level and return.
+    if LOGGER_STARTED.get().is_some() {
+        log::set_max_level(level);
+        return Ok(());
+    }
+
     let colors = ColoredLevelConfig::new()
         .info(Color::Green)
         .debug(Color::Blue)
         .warn(Color::Yellow)
         .error(Color::Red);
 
-    fern::Dispatch::new()
-        // use the passed‐in filter here
+    let dispatch = fern::Dispatch::new()
         .level(level)
         .level_for("hyper", LevelFilter::Warn)
         .level_for("reqwest", LevelFilter::Warn)
@@ -26,8 +34,17 @@ pub fn init_logger(level: LevelFilter) -> Result<(), fern::InitError> {
                     ))
                 })
                 .chain(std::io::stdout()),
-        )
-        .apply()?;
+        );
 
-    Ok(())
+    match dispatch.apply() {
+        Ok(()) => {
+            let _ = LOGGER_STARTED.set(());
+            Ok(())
+        }
+        Err(_e) => {
+            // Someone else already set a global logger. Respect the requested level and continue.
+            log::set_max_level(level);
+            Ok(())
+        }
+    }
 }
