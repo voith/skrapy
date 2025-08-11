@@ -101,7 +101,9 @@ impl Scheduler {
     }
 
     pub fn enqueue_request(&mut self, request: Request) -> bool {
-        if self.dupefilter.record_request_if_unseen(&request) {
+        // allow requests with retry_count > 0 to be enqueued again
+        // reject all duplicate requests that are not being retried
+        if request.retry_count() > 0 || self.dupefilter.record_request_if_unseen(&request) {
             self.queue.push(request);
             true
         } else {

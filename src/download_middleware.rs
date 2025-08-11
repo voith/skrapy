@@ -6,7 +6,7 @@
 //! - `DownloadMiddlewareProcessor` threads the `DownloadError` through all middlewares in order.
 //!   Any `Drop` stops the chain; if no middlewares are present, we default to dropping (no retry).
 
-use crate::downloader::{DownloadError};
+use crate::downloader::DownloadError;
 use crate::request::Request;
 
 /// Decision taken by a download-error middleware.
@@ -53,10 +53,6 @@ impl DownloadMiddlewareProcessor {
     /// Returns `Some(Request)` if the chain completed without a `Drop` (retry this request),
     /// or `None` if the request was dropped or if there were no middlewares.
     pub fn process_error(&self, mut de: DownloadError) -> Option<Request> {
-        if self.middlewares.is_empty() {
-            return None;
-        }
-
         for mw in &self.middlewares {
             match mw.process_error(de) {
                 DownloadDecision::Continue(next) => {
@@ -91,7 +87,8 @@ impl RetryOnErrorMiddleware {
 impl DownloadMiddleware for RetryOnErrorMiddleware {
     fn process_error(&self, mut de: DownloadError) -> DownloadDecision {
         let current = de.request.retry_count() as u32;
-        if current > self.max_retries {
+        // retry count starts from 0
+        if current > self.max_retries - 1 {
             DownloadDecision::Drop(de)
         } else {
             de.request.increment_retry_count();
@@ -103,6 +100,7 @@ impl DownloadMiddleware for RetryOnErrorMiddleware {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::downloader::HttpError;
     use crate::request::Request;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
@@ -141,13 +139,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn processor_drops_when_no_middleware_retries() {
+    async fn processor_returns_request_when_no_middleware_retries() {
         let (base, server) = start_mock_server().await;
         let url = format!("{}/", &base);
         let proc = DownloadMiddlewareProcessor::new();
         let req = Request::get(&url);
         let out = proc.process_error(mk_err(req, &base).await);
-        assert!(out.is_none(), "Expected drop when there are no middlewares");
+        assert!(
+            out.is_some(),
+            "Expected Some(Request) when there are no middlewares"
+        );
         server.abort();
     }
 
@@ -155,7 +156,7 @@ mod tests {
     async fn retry_middleware_retries_until_exceeds_threshold() {
         let (base, server) = start_mock_server().await;
         let url = format!("{}/", &base);
-        let mw = RetryOnErrorMiddleware::new(3); // drop when retry_count() > 3
+        let mw = RetryOnErrorMiddleware::new(4);
         let req = Request::get(&url);
         let mut de = mk_err(req, &base).await;
 
@@ -241,6 +242,35 @@ mod tests {
         let req = Request::get(&url);
         let out = proc.process_error(mk_err(req, &base).await);
         assert!(out.is_none(), "Expected Drop to short-circuit the chain");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn processor_with_retry_middleware_drops_on_third_attempt() {
+        // Configure retry middleware to allow up to 2 retries.
+        // With starting retry_count=0: attempt1 -> cnt=1 (continue), attempt2 -> cnt=2 (continue),
+        // attempt3 sees current=2 > max(2) -> Drop → processor returns None.
+        let (base, server) = start_mock_server().await;
+        let url = format!("{}/", &base);
+
+        let mut proc = DownloadMiddlewareProcessor::new();
+        proc.add(RetryOnErrorMiddleware::new(2));
+
+        // Attempt 1
+        let req = Request::get(&url);
+        let out1 = proc.process_error(mk_err(req, &base).await);
+        let req = out1.expect("attempt 1 should continue");
+        assert_eq!(req.retry_count(), 1);
+
+        // Attempt 2
+        let out2 = proc.process_error(mk_err(req, &base).await);
+        let req = out2.expect("attempt 2 should continue");
+        assert_eq!(req.retry_count(), 2);
+
+        // Attempt 3 -> should drop (None)
+        let out3 = proc.process_error(mk_err(req, &base).await);
+        assert!(out3.is_none(), "attempt 3 should drop and return None");
+
         server.abort();
     }
 }

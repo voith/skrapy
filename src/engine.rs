@@ -1,12 +1,12 @@
-use crate::downloader::{DownloadError, DownloadManager, DownloadResult};
+use crate::downloader::DownloadManager;
 use crate::logger;
 use crate::request::Request;
+use crate::response::Response;
 use crate::scheduler::Scheduler;
 use crate::scraper::Scraper;
 use crate::spider::Spider;
-use std::sync::Arc;
 use tokio::signal;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::mpsc;
 use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
 
@@ -14,7 +14,8 @@ pub struct Engine {
     download_manager: DownloadManager,
     scraper: Scraper,
     scheduler: Scheduler,
-    downloader_output_rx: mpsc::Receiver<Result<DownloadResult, DownloadError>>,
+    downloader_response_rx: mpsc::Receiver<Response>,
+    downloader_retried_request_rx: mpsc::Receiver<Request>,
     spider_request_rx: mpsc::Receiver<Request>,
     shutdown: CancellationToken,
     log_level: log::LevelFilter,
@@ -26,7 +27,9 @@ impl Engine {
     const DOWNLOADER_OUTPUT_QUEUE: usize = Self::CONCURRENCY_LIMIT * 100;
 
     pub fn new(spider: Box<dyn Spider>, log_level: log::LevelFilter) -> Self {
-        let (downloader_output_tx, downloader_output_rx) =
+        let (downloader_response_tx, downloader_response_rx) =
+            mpsc::channel(Self::DOWNLOADER_OUTPUT_QUEUE);
+        let (downloader_retried_request_tx, downloader_retried_request_rx) =
             mpsc::channel(Self::DOWNLOADER_OUTPUT_QUEUE);
         let (spider_request_tx, spider_request_rx) = mpsc::channel(Self::SCRAPER_QUEUE_SIZE);
         let scraper = Scraper::new(spider, spider_request_tx);
@@ -35,11 +38,13 @@ impl Engine {
         Self {
             download_manager: DownloadManager::new(
                 Self::CONCURRENCY_LIMIT,
-                Arc::new(Mutex::new(downloader_output_tx)),
+                downloader_response_tx,
+                downloader_retried_request_tx,
             ),
             scraper,
             scheduler,
-            downloader_output_rx,
+            downloader_response_rx,
+            downloader_retried_request_rx,
             spider_request_rx,
             shutdown,
             log_level,
@@ -50,8 +55,9 @@ impl Engine {
         if self.download_manager.is_idle()
             && self.scraper.is_idle()
             && !self.scheduler.has_pending_requests()
-            && self.downloader_output_rx.is_empty()
+            && self.downloader_response_rx.is_empty()
             && self.spider_request_rx.is_empty()
+            && self.downloader_retried_request_rx.is_empty()
         {
             log::info!("finished scraping...");
             self.shutdown.cancel();
@@ -85,17 +91,12 @@ impl Engine {
                         self.download_manager.enqueue_request(request).await;
                     }
                 }
-                Some(download_output) = self.downloader_output_rx.recv() => {
-                    match download_output {
-                        Ok(download_result) => {
-                            self.scraper.process_response(download_result).await;
-                        }
-                        Err(download_error) => {
-                            //TODO(Voith): Handle Download Error
-                            log::error!("Encountered download error for request: {:?}", &download_error.request);
-                        }
-                    }
+                Some(response) = self.downloader_response_rx.recv() => {
+                    self.scraper.process_response(response).await;
                 },
+                Some(retried_request) = self.downloader_retried_request_rx.recv() => {
+                        self.scheduler.enqueue_request(retried_request);
+                }
                 _ = idle_interval.tick() => {},
             }
             // shudown if idle
@@ -272,5 +273,103 @@ mod tests {
             "File did not contain expected JSON, got: {}",
             contents
         );
+    }
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::task::JoinHandle;
+
+    #[tokio::test]
+    async fn engine_retry_middleware_invokes_expected_callbacks() {
+        static REQUEST2_HITS: AtomicUsize = AtomicUsize::new(0);
+        static CALLBACK1_COUNT: AtomicUsize = AtomicUsize::new(0);
+        static CALLBACK2_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+        // Minimal HTTP server:
+        // - /request1 → always 500
+        // - /request2 → first 500, then 200 OK "ok"
+        async fn start_mock_server() -> (String, JoinHandle<()>) {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let handle = tokio::spawn(async move {
+                loop {
+                    match listener.accept().await {
+                        Ok((mut socket, _)) => {
+                            let mut buf = [0u8; 512];
+                            let _ = socket.read(&mut buf).await;
+                            let req = String::from_utf8_lossy(&buf);
+                            if req.contains("GET /request1 ") {
+                                let _ = socket.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                            } else if req.contains("GET /request2 ") {
+                                let n = REQUEST2_HITS.fetch_add(1, Ordering::SeqCst);
+                                if n == 0 {
+                                    let _ = socket.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                                } else {
+                                    let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await;
+                                }
+                            } else {
+                                let _ = socket.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                            }
+                            let _ = socket.shutdown().await;
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            (format!("http://{}", addr), handle)
+        }
+
+        struct TestSpider {
+            base: String,
+        }
+        impl TestSpider {
+            fn callback1(_resp: Response) -> CallbackReturn {
+                CALLBACK1_COUNT.fetch_add(1, Ordering::SeqCst);
+                Box::new(std::iter::empty())
+            }
+            fn callback2(_resp: Response) -> CallbackReturn {
+                CALLBACK2_COUNT.fetch_add(1, Ordering::SeqCst);
+                Box::new(std::iter::empty())
+            }
+        }
+        impl Spider for TestSpider {
+            fn start(&self) -> CallbackReturn {
+                let url1 = &format!("{}/request1", self.base);
+                let url2 = &format!("{}/request2", self.base);
+                let requests = vec![
+                    SpiderOutput::Request(Request::get(url1).with_callback(Self::callback1)),
+                    SpiderOutput::Request(Request::get(url2).with_callback(Self::callback2)),
+                ];
+                Box::new(requests.into_iter())
+            }
+        }
+        // reset global counters
+        REQUEST2_HITS.store(0, Ordering::SeqCst);
+        CALLBACK1_COUNT.store(0, Ordering::SeqCst);
+        CALLBACK2_COUNT.store(0, Ordering::SeqCst);
+
+        // start server
+        let (base, server) = start_mock_server().await;
+
+        // spin the engine with this spider
+        let spider = TestSpider { base };
+        let mut engine = Engine::new(Box::new(spider), log::LevelFilter::Info);
+        let _ = engine.run().await;
+
+        // Assertions:
+        // /request1 always 500 → dropped by retry middleware → callback1 never called
+        assert_eq!(
+            CALLBACK1_COUNT.load(Ordering::SeqCst),
+            0,
+            "callback1 should never run"
+        );
+        // /request2 500 once then 200 → callback2 should run exactly once
+        assert_eq!(
+            CALLBACK2_COUNT.load(Ordering::SeqCst),
+            1,
+            "callback2 should run exactly once"
+        );
+
+        server.abort();
     }
 }

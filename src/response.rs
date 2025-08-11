@@ -1,4 +1,3 @@
-use crate::downloader::DownloadResult;
 use crate::request::Request;
 use bytes::Bytes;
 use libxml::parser::Parser;
@@ -14,18 +13,6 @@ pub struct Response {
     pub headers: HeaderMap,
     pub body: Bytes,
     pub text: String,
-}
-
-impl From<DownloadResult> for Response {
-    fn from(download_result: DownloadResult) -> Self {
-        Response {
-            request: download_result.request,
-            status: download_result.status,
-            headers: download_result.headers,
-            body: download_result.body,
-            text: download_result.text,
-        }
-    }
 }
 
 impl Response {
@@ -144,7 +131,6 @@ impl<'a> IntoIterator for &'a SelectorList {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::downloader::DownloadResult;
     use crate::request::Request;
     use bytes::Bytes;
     use http::Response as HttpResponse;
@@ -167,17 +153,14 @@ mod tests {
         // Create a dummy Request
         let request = Request::default();
 
-        // Create a DownloadResult
-        let download_result = DownloadResult {
+        // Create a Response directly
+        let response = Response {
             request: request.clone(),
             status: reqwest_response.status(),
             headers: reqwest_response.headers().clone(),
             body: Bytes::new(),
             text: "".to_string(),
         };
-
-        // Convert DownloadResult into Response
-        let response = Response::from(download_result);
 
         // Assert that the url in the resulting Response matches the input request
         assert_eq!(response.request.url, request.url);

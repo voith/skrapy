@@ -1,5 +1,4 @@
 use crate::{
-    downloader::DownloadResult,
     item_pipeline::{PipelineError, PipelineManager},
     request::Request,
     response::Response,
@@ -57,8 +56,7 @@ impl Scraper {
             .await;
     }
 
-    pub async fn process_response(&self, download_result: DownloadResult) {
-        let response = Response::from(download_result);
+    pub async fn process_response(&self, response: Response) {
         let spider_output = (response.request.callback)(response);
         // For start requests, pass `true`, for parsed callbacks, pass `false`
         self.spider_output_processor
@@ -253,7 +251,7 @@ mod tests {
     async fn test_process_response_callback_called() {
         static CALLED: AtomicBool = AtomicBool::new(false);
 
-        // Setup a DownloadResult with a callback that sets CALLED
+        // Setup a Response with a callback that sets CALLED
         let req = Request::get("http://example.com").with_callback(|_: Response| {
             CALLED.store(true, Ordering::SeqCst);
             Box::new(std::iter::empty())
@@ -263,7 +261,7 @@ mod tests {
             .body(Vec::new())
             .unwrap();
         let reqwest_res = ReqwestResponse::from(http_res);
-        let download_result = DownloadResult {
+        let response = Response {
             request: req,
             status: reqwest_res.status(),
             headers: reqwest_res.headers().clone(),
@@ -273,7 +271,7 @@ mod tests {
 
         let (tx, _rx) = mpsc::channel(1);
         let scraper = Scraper::new(Box::new(DummySpider), tx);
-        scraper.process_response(download_result).await;
+        scraper.process_response(response).await;
 
         assert!(CALLED.load(Ordering::SeqCst), "Callback was not invoked");
     }
@@ -296,7 +294,7 @@ mod tests {
             .body(Vec::new())
             .unwrap();
         let reqwest_res = ReqwestResponse::from(http_res);
-        let download_result = DownloadResult {
+        let response = Response {
             request: req,
             status: reqwest_res.status(),
             headers: reqwest_res.headers().clone(),
@@ -306,7 +304,7 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel(1);
         let scraper = Scraper::new(Box::new(DummySpider), tx);
-        scraper.process_response(download_result).await;
+        scraper.process_response(response).await;
 
         // Should receive the new request (not marked start)
         let request = rx.recv().await.expect("Expected a request");

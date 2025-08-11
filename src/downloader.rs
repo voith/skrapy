@@ -1,20 +1,14 @@
-use crate::request::Request;
-use bytes::Bytes;
+use crate::{
+    download_middleware::{DownloadMiddlewareProcessor, RetryOnErrorMiddleware},
+    request::Request,
+    response::Response,
+};
 use reqwest::Client;
 use reqwest::Response as ReqwestResponse;
-use reqwest::header::HeaderMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
-
-pub struct DownloadResult {
-    pub request: Request,
-    pub status: reqwest::StatusCode,
-    pub headers: HeaderMap,
-    pub body: Bytes,
-    pub text: String,
-}
 
 /// Wraps low-level HTTP errors.
 pub struct HttpError {
@@ -38,8 +32,10 @@ pub struct DownloadManager {
 
 pub struct Downloader {
     client: Client,
+    download_middleware_processor: Arc<Mutex<DownloadMiddlewareProcessor>>,
     receiver: Arc<Mutex<mpsc::Receiver<Request>>>,
-    result_tx: Arc<Mutex<mpsc::Sender<Result<DownloadResult, DownloadError>>>>,
+    response_tx: mpsc::Sender<Response>,
+    retry_request_tx: mpsc::Sender<Request>,
     active_count: Arc<AtomicUsize>,
     pending_count: Arc<AtomicUsize>,
 }
@@ -47,11 +43,17 @@ pub struct Downloader {
 impl DownloadManager {
     pub fn new(
         concurrency_limit: usize,
-        result_tx: Arc<Mutex<mpsc::Sender<Result<DownloadResult, DownloadError>>>>,
+        response_tx: mpsc::Sender<Response>,
+        retry_request_tx: mpsc::Sender<Request>,
     ) -> Self {
         let active_count = Arc::new(AtomicUsize::new(0));
         let pending_count = Arc::new(AtomicUsize::new(0));
         let (sender, receiver) = mpsc::channel(concurrency_limit * 2);
+        // TODO: make max_retries configurable via settings/env; default 3 for now
+        let max_retries = 3 as u32;
+        let mut mwp = DownloadMiddlewareProcessor::new();
+        mwp.add(RetryOnErrorMiddleware::new(max_retries));
+        let mw_processor = Arc::new(Mutex::new(mwp));
         let mut manager = DownloadManager {
             concurrency_limit,
             client: Client::new(),
@@ -60,24 +62,35 @@ impl DownloadManager {
             active_count: active_count,
             pending_count: pending_count,
         };
-        manager.start(receiver, result_tx);
+        manager.start(receiver, response_tx, mw_processor, retry_request_tx);
         manager
     }
 
     fn start(
         &mut self,
         receiver: mpsc::Receiver<Request>,
-        result_tx: Arc<Mutex<mpsc::Sender<Result<DownloadResult, DownloadError>>>>,
+        response_tx: mpsc::Sender<Response>,
+        download_middleware_processor: Arc<Mutex<DownloadMiddlewareProcessor>>,
+        retry_request_tx: mpsc::Sender<Request>,
     ) {
         let shared_rx = Arc::new(Mutex::new(receiver));
         for _ in 0..self.concurrency_limit as usize {
             let client = self.client.clone();
             let rx = shared_rx.clone();
-            let result_tx_clone = result_tx.clone();
+            let response_tx_clone = response_tx.clone();
             let active_count = Arc::clone(&self.active_count);
             let pending_count = Arc::clone(&self.pending_count);
-            let mut downloader =
-                Downloader::new(client, rx, result_tx_clone, active_count, pending_count);
+            let mwp = download_middleware_processor.clone();
+            let retry_tx = retry_request_tx.clone();
+            let mut downloader = Downloader::new(
+                client,
+                mwp,
+                rx,
+                response_tx_clone,
+                retry_tx,
+                active_count,
+                pending_count,
+            );
             let handle = tokio::spawn(async move {
                 downloader.handle_incoming_requests().await;
             });
@@ -119,15 +132,19 @@ impl DownloadManager {
 impl Downloader {
     pub fn new(
         client: Client,
+        download_middleware_processor: Arc<Mutex<DownloadMiddlewareProcessor>>,
         receiver: Arc<Mutex<mpsc::Receiver<Request>>>,
-        result_tx: Arc<Mutex<mpsc::Sender<Result<DownloadResult, DownloadError>>>>,
+        response_tx: mpsc::Sender<Response>,
+        retry_request_tx: mpsc::Sender<Request>,
         active_count: Arc<AtomicUsize>,
         pending_count: Arc<AtomicUsize>,
     ) -> Self {
         Downloader {
             client,
+            download_middleware_processor,
             receiver,
-            result_tx,
+            response_tx,
+            retry_request_tx,
             active_count,
             pending_count,
         }
@@ -166,31 +183,42 @@ impl Downloader {
                     drop(rx);
                     self.active_count.fetch_add(1, Ordering::SeqCst);
                     match self.download(&req).await {
-                        Ok(response) => {
-                            // Extract metadata
-                            let status = response.status();
-                            let headers = response.headers().clone();
-                            // Read full body into bytes
-                            match response.bytes().await {
-                                Ok(body) => {
-                                    // Convert bytes to UTF-8 text
-                                    log::debug!("downloaded request: {:?}", &req);
-                                    let text = String::from_utf8_lossy(&body).to_string();
-                                    let result = DownloadResult {
-                                        request: req,
-                                        status,
-                                        headers,
-                                        body: body.clone(),
-                                        text: text,
-                                    };
-                                    let _ = self.result_tx.lock().await.send(Ok(result)).await;
+                        Ok(resp) => {
+                            // Treat non-success HTTP status codes as errors (4xx/5xx)
+                            match resp.error_for_status() {
+                                Ok(ok_resp) => {
+                                    let status = ok_resp.status();
+                                    let headers = ok_resp.headers().clone();
+                                    match ok_resp.bytes().await {
+                                        Ok(body) => {
+                                            log::debug!("downloaded request: {:?}", &req);
+                                            let text = String::from_utf8_lossy(&body).to_string();
+                                            let response = Response {
+                                                request: req,
+                                                status,
+                                                headers,
+                                                body: body.clone(),
+                                                text,
+                                            };
+                                            let _ = self.response_tx.send(response).await;
+                                        }
+                                        // Response body Error
+                                        Err(err) => {
+                                            let dl_err = DownloadError {
+                                                request: req,
+                                                error: HttpError { source: err },
+                                            };
+                                            self.handle_download_error(dl_err).await;
+                                        }
+                                    }
                                 }
+                                // Http status code error
                                 Err(err) => {
                                     let dl_err = DownloadError {
                                         request: req,
                                         error: HttpError { source: err },
                                     };
-                                    let _ = self.result_tx.lock().await.send(Err(dl_err)).await;
+                                    self.handle_download_error(dl_err).await;
                                 }
                             }
                         }
@@ -199,7 +227,7 @@ impl Downloader {
                                 request: req,
                                 error: HttpError { source: err },
                             };
-                            let _ = self.result_tx.lock().await.send(Err(dl_err)).await;
+                            self.handle_download_error(dl_err).await;
                         }
                     }
                     self.active_count.fetch_sub(1, Ordering::SeqCst);
@@ -208,11 +236,18 @@ impl Downloader {
             }
         }
     }
+
+    async fn handle_download_error(&self, dl_err: DownloadError) {
+        let guard = self.download_middleware_processor.lock().await;
+        if let Some(retry_req) = guard.process_error(dl_err) {
+            let _ = self.retry_request_tx.send(retry_req).await;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DownloadManager, Downloader};
+    use super::*;
     use crate::request::{Body, Request};
     use crate::spider::CallbackReturn;
     use httpmock::{Method::GET, MockServer};
@@ -238,12 +273,12 @@ mod tests {
             then.status(200).body("ok");
         });
 
-        // Channel for receiving download results
+        // Channel for receiving responses
         let (tx_res, mut rx_res) = mpsc::channel(10);
-        let result_tx = Arc::new(Mutex::new(tx_res));
-
-        // Initialize DownloadManager with concurrency limit and result transmitter
-        let manager = DownloadManager::new(4, result_tx);
+        // Channel for retry requests
+        let (retry_tx, _retry_rx) = mpsc::channel(10);
+        // Initialize DownloadManager with concurrency limit, response transmitter, and retry sender
+        let manager = DownloadManager::new(4, tx_res, retry_tx);
 
         // Enqueue multiple requests
         for _ in 0..5 {
@@ -262,20 +297,15 @@ mod tests {
 
         // Collect and verify responses
         for _ in 0..5 {
-            let download_result = timeout(Duration::from_secs(2), rx_res.recv())
+            let response = timeout(Duration::from_secs(2), rx_res.recv())
                 .await
                 .expect("timed out")
                 .expect("response channel closed");
-            match download_result {
-                Ok(res) => {
-                    assert_eq!(res.status, 200);
-                    assert_eq!(
-                        res.request.url.as_str(),
-                        &format!("{}/test", server.base_url())
-                    );
-                }
-                Err(_) => panic!("Expected Ok DownloadResult"),
-            }
+            assert_eq!(response.status, 200);
+            assert_eq!(
+                response.request.url.as_str(),
+                &format!("{}/test", server.base_url())
+            );
         }
     }
 
@@ -298,10 +328,15 @@ mod tests {
             0,
             false,
         );
+        let mwp = DownloadMiddlewareProcessor::new();
+        let mwp = Arc::new(Mutex::new(mwp));
+        let (retry_tx, _retry_rx) = mpsc::channel(1);
         let downloader = Downloader::new(
             client,
+            mwp,
             Arc::new(Mutex::new(mpsc::channel(1).1)),
-            Arc::new(Mutex::new(mpsc::channel(1).0)),
+            mpsc::channel(1).0,
+            retry_tx,
             Arc::new(AtomicUsize::new(0)),
             Arc::new(AtomicUsize::new(0)),
         );
@@ -325,11 +360,15 @@ mod tests {
         );
         let (tx_req, rx_req) = mpsc::channel(1);
         let (tx_res, mut rx_res) = mpsc::channel(1);
-        let result_tx = Arc::new(Mutex::new(tx_res));
+        let mwp = DownloadMiddlewareProcessor::new();
+        let mwp = Arc::new(Mutex::new(mwp));
+        let (retry_tx, mut _retry_rx) = mpsc::channel(1);
         let mut downloader = Downloader::new(
             Client::new(),
+            mwp,
             Arc::new(Mutex::new(rx_req)),
-            result_tx.clone(),
+            tx_res,
+            retry_tx,
             Arc::new(AtomicUsize::new(0)),
             Arc::new(AtomicUsize::new(0)),
         );
@@ -343,11 +382,10 @@ mod tests {
         tx_req.send(request.clone()).await.unwrap();
         drop(tx_req);
 
-        // Receive result
-        if let Ok(Some(Err(dl_err))) = timeout(Duration::from_secs(1), rx_res.recv()).await {
-            assert_eq!(dl_err.request.url, request.url);
-        } else {
-            panic!("Expected a DownloadError");
+        // Receive result: Expect a timeout (no message sent)
+        match timeout(Duration::from_millis(500), rx_res.recv()).await {
+            Ok(Some(_)) => panic!("Expected no message on response channel for error"),
+            _ => {} // Ok: no message received
         }
     }
 
@@ -371,11 +409,15 @@ mod tests {
         );
         let (tx_req, rx_req) = mpsc::channel(1);
         let (tx_res, mut rx_res) = mpsc::channel(1);
-        let result_tx = Arc::new(Mutex::new(tx_res));
+        let mwp = DownloadMiddlewareProcessor::new();
+        let mwp = Arc::new(Mutex::new(mwp));
+        let (retry_tx, _retry_rx) = mpsc::channel(1);
         let mut downloader = Downloader::new(
             Client::new(),
+            mwp,
             Arc::new(Mutex::new(rx_req)),
-            result_tx.clone(),
+            tx_res,
+            retry_tx,
             Arc::new(AtomicUsize::new(0)),
             Arc::new(AtomicUsize::new(0)),
         );
@@ -387,21 +429,20 @@ mod tests {
         tx_req.send(request.clone()).await.unwrap();
         drop(tx_req);
 
-        if let Ok(Some(Ok(dl_res))) = timeout(Duration::from_secs(1), rx_res.recv()).await {
-            assert_eq!(dl_res.request.url, request.url);
-            let body = dl_res.text;
+        if let Ok(Some(response)) = timeout(Duration::from_secs(1), rx_res.recv()).await {
+            assert_eq!(response.request.url, request.url);
+            let body = response.text;
             assert_eq!(body, "data");
         } else {
-            panic!("Expected a DownloadResult");
+            panic!("Expected a Response");
         }
     }
 
     #[tokio::test]
     async fn test_download_manager_is_idle() {
         let (tx_res, _rx_res) = mpsc::channel(10);
-        let result_tx = Arc::new(Mutex::new(tx_res));
-
-        let manager = DownloadManager::new(2, result_tx.clone());
+        let (retry_tx, _retry_rx) = mpsc::channel(10);
+        let manager = DownloadManager::new(2, tx_res, retry_tx);
 
         // Should be idle initially
         assert!(manager.is_idle());
@@ -437,8 +478,8 @@ mod tests {
         });
 
         let (tx_res, mut rx_res) = mpsc::channel(10);
-        let result_tx = Arc::new(Mutex::new(tx_res));
-        let manager = DownloadManager::new(2, result_tx.clone());
+        let (retry_tx, _retry_rx) = mpsc::channel(10);
+        let manager = DownloadManager::new(2, tx_res, retry_tx);
 
         // Enqueue multiple requests
         let num_requests = 5;
@@ -458,11 +499,11 @@ mod tests {
 
         // Collect all responses
         for _ in 0..num_requests {
-            let download_result = timeout(Duration::from_secs(2), rx_res.recv())
+            let response = timeout(Duration::from_secs(2), rx_res.recv())
                 .await
                 .expect("timeout")
                 .expect("channel closed");
-            assert!(download_result.is_ok());
+            assert_eq!(response.status, 200);
         }
 
         // Slight delay to ensure all tasks completed
@@ -481,8 +522,8 @@ mod tests {
         });
 
         let (tx_res, _rx_res) = mpsc::channel(10);
-        let result_tx = Arc::new(Mutex::new(tx_res));
-        let mut manager = DownloadManager::new(2, result_tx.clone());
+        let (retry_tx, _retry_rx) = mpsc::channel(10);
+        let mut manager = DownloadManager::new(2, tx_res, retry_tx);
 
         let request = Request::new(
             Url::parse(&format!("{}/stop", server.base_url())).unwrap(),
@@ -503,5 +544,107 @@ mod tests {
 
         // After stopping, the manager should report as idle
         assert!(manager.is_idle());
+    }
+
+    #[tokio::test]
+    async fn downloader_drops_request_after_retry_threshold() {
+        let server = MockServer::start();
+        let _ = server.mock(|when, then| {
+            when.method(GET).path("/flip");
+            then.status(500);
+        });
+
+        // Response & Retry channels
+        let (tx_res, rx_res) = mpsc::channel::<Response>(10);
+        let (retry_tx, mut retry_rx) = mpsc::channel::<Request>(10);
+
+        // Manager with new signature
+        let manager = DownloadManager::new(2, tx_res, retry_tx);
+
+        // Initial request
+        let req = Request::new(
+            Url::parse(&format!("{}/flip", server.base_url())).unwrap(),
+            Method::GET,
+            HeaderMap::new(),
+            Body::default(),
+            dummy_callback,
+            0,
+            0,
+            false,
+        );
+        manager.enqueue_request(req).await;
+
+        // decreasing this to 0..2 will cause the test to fai
+        // also increasing to 0..4 will cause a time error as the retry can't be retried further
+        for _ in 0..3 {
+            let retry_req = timeout(Duration::from_secs(1), retry_rx.recv())
+                .await
+                .expect("timed out waiting for retry")
+                .expect("retry channel closed unexpectedly");
+            manager.enqueue_request(retry_req).await;
+        }
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        assert!(retry_rx.is_empty(), "retry queue should be empty");
+        assert!(rx_res.is_empty(), "response queue should be empty");
+    }
+
+    #[tokio::test]
+    async fn download_manager_retries_then_succeeds_and_retry_queue_not_empty() {
+        let server = MockServer::start();
+        let mut mock = server.mock(|when, then| {
+            when.method(GET).path("/flip");
+            then.status(500);
+        });
+
+        // Response & Retry channels
+        let (tx_res, mut rx_res) = mpsc::channel::<Response>(10);
+        let (retry_tx, mut retry_rx) = mpsc::channel::<Request>(10);
+
+        // Manager with new signature
+        let manager = DownloadManager::new(2, tx_res, retry_tx);
+
+        // Initial request
+        let req = Request::new(
+            Url::parse(&format!("{}/flip", server.base_url())).unwrap(),
+            Method::GET,
+            HeaderMap::new(),
+            Body::default(),
+            dummy_callback,
+            0,
+            0,
+            false,
+        );
+
+        manager.enqueue_request(req.clone()).await;
+
+        // We should see a retry get enqueued after the first 500
+        let retry_req = timeout(Duration::from_secs(1), retry_rx.recv())
+            .await
+            .expect("timed out waiting for retry")
+            .expect("retry channel closed unexpectedly");
+
+        // delete response with 500
+        mock.delete();
+
+        let _ = server.mock(|when, then| {
+            when.method(GET).path("/flip");
+            then.status(200).body("eventual ok");
+        });
+
+        // Feed the retry back to the manager (like the engine would)
+        manager.enqueue_request(retry_req).await;
+
+        // Now we should eventually get a successful Response
+        let response = timeout(Duration::from_secs(2), rx_res.recv())
+            .await
+            .expect("timed out waiting for response")
+            .expect("response channel closed");
+        assert_eq!(response.status.as_u16(), 200);
+        assert_eq!(
+            response.request.url.as_str(),
+            &format!("{}/flip", server.base_url())
+        );
+        assert_eq!(response.text, "eventual ok");
     }
 }
